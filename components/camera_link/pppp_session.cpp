@@ -130,7 +130,12 @@ Session::Event Session::handle_packet(const std::uint8_t *bytes,
         }
         return event;
     }
-    if (bytes[1] == static_cast<std::uint8_t>(PacketType::discovery_reply)) {
+    // A 0x42 packet carrying the "LBCS" marker is a discovery reply; a 0x42
+    // without it is a fragment of a larger ARTEMIS message and is handled
+    // below like a DATA packet (same DRW framing).
+    if (bytes[1] == static_cast<std::uint8_t>(PacketType::discovery_reply) &&
+        size >= 8 && bytes[4] == 'L' && bytes[5] == 'B' && bytes[6] == 'C' &&
+        bytes[7] == 'S') {
         event.type = Event::Type::discovery_reply;
         return event;
     }

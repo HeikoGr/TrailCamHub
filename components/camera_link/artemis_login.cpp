@@ -91,8 +91,19 @@ void LoginSession::on_packet(const std::uint8_t *bytes, std::size_t size,
 
 void LoginSession::handle_message(const std::uint8_t *payload, std::size_t size)
 {
+    const Reassembler::Status status = reassembler_.feed(payload, size);
+    if (status == Reassembler::Status::incomplete)
+        return;
+    if (status == Reassembler::Status::invalid) {
+        reassembler_.reset();
+        return;
+    }
+
     Message msg;
-    if (!parse(cipher_, payload, size, msg))
+    const bool ok = parse(cipher_, reassembler_.message().data(),
+                          reassembler_.message().size(), msg);
+    reassembler_.reset();
+    if (!ok)
         return;
     if (msg.msg_type != kMsgResponse)
         return;
@@ -100,6 +111,10 @@ void LoginSession::handle_message(const std::uint8_t *payload, std::size_t size)
     std::int64_t cmd_id = 0;
     if (!json_find_int(msg.json, "cmdId", cmd_id))
         return;
+
+    has_response_ = true;
+    last_response_cmd_ = cmd_id;
+    last_response_json_ = msg.json;
 
     if (cmd_id == 0 && state_ == State::logging_in) {
         std::int64_t result = 0;

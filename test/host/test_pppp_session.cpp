@@ -175,3 +175,19 @@ TEST_CASE("reset restarts the indices")
     CHECK(index == 0);
     CHECK(receive(session, data_packet(0, "x")).type == Type::data);
 }
+
+TEST_CASE("a non-LBCS 0x42 fragment is delivered as DATA and acknowledged")
+{
+    FakeTransport transport;
+    Session session(transport);
+
+    // Same DRW framing as DATA but type 0x42 (a fragment, not LBCS discovery).
+    std::vector<std::uint8_t> fragment = data_packet(0, "chunk");
+    fragment[1] = 0x42;
+
+    const Session::Event event = receive(session, fragment);
+    CHECK(event.type == Type::data);
+    CHECK(std::string(reinterpret_cast<const char *>(event.payload),
+                      event.payload_size) == "chunk");
+    CHECK(transport.sent.size() == 1);  // the ACK
+}

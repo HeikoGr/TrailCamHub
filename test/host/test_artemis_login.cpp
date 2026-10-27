@@ -149,6 +149,45 @@ TEST_CASE("login fails when the camera rejects it")
     CHECK_FALSE(login.send_command(512, 3000));
 }
 
+TEST_CASE("a fragmented command response is reassembled")
+{
+    FakeTransport transport;
+    pppp::Session session(transport);
+    Aes128 cipher = command_cipher();
+    LoginSession login(session, cipher);
+
+    REQUIRE(login.start(1766505566, 1000));
+    std::vector<std::uint8_t> login_resp = camera_data(
+        0, response_message(cipher, 1,
+                            "{\"cmdId\":0,\"result\":0,\"token\":113034621}"));
+    login.on_packet(login_resp.data(), login_resp.size(), 2000);
+    REQUIRE(login.logged_in());
+    CHECK(login.last_response_cmd() == 0);
+
+    REQUIRE(login.request_file_list(3000));
+
+    // A long response that spans two packets.
+    const std::string files =
+        "{\"cmdId\":768,\"result\":0,\"files\":[{\"n\":\"IMG_0001.JPG\"},"
+        "{\"n\":\"IMG_0002.JPG\"},{\"n\":\"IMG_0003.JPG\"}]}";
+    const std::vector<std::uint8_t> full = response_message(cipher, 2, files);
+    const std::size_t cut = full.size() / 2;
+
+    // First half as a 0x42 fragment (index 1), the rest as DATA (index 2).
+    std::vector<std::uint8_t> part0 = camera_data(
+        1, std::vector<std::uint8_t>(full.begin(), full.begin() + cut));
+    part0[1] = 0x42;
+    std::vector<std::uint8_t> part1 = camera_data(
+        2, std::vector<std::uint8_t>(full.begin() + cut, full.end()));
+
+    login.on_packet(part0.data(), part0.size(), 3100);
+    CHECK(login.last_response_cmd() == 0);  // still incomplete
+    login.on_packet(part1.data(), part1.size(), 3200);
+
+    CHECK(login.last_response_cmd() == 768);
+    CHECK(login.last_response_json() == files);
+}
+
 TEST_CASE("a CLOSE from the camera is reported")
 {
     FakeTransport transport;

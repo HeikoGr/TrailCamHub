@@ -11,6 +11,7 @@
 #include <string>
 
 #include "artemis_aes128.hpp"
+#include "artemis_reassembler.hpp"
 #include "pppp_session.hpp"
 
 namespace camera::artemis
@@ -46,6 +47,26 @@ class LoginSession
     // Returns false if not logged in or the send fails.
     bool send_command(std::uint32_t cmd_id, std::int64_t now_us);
 
+    // Requests the media list (cmdId 768); see send_command().
+    bool request_file_list(std::int64_t now_us)
+    {
+        return send_command(768, now_us);
+    }
+
+    // The most recently received, fully reassembled command response.
+    bool has_response() const
+    {
+        return has_response_;
+    }
+    std::int64_t last_response_cmd() const
+    {
+        return last_response_cmd_;
+    }
+    const std::string &last_response_json() const
+    {
+        return last_response_json_;
+    }
+
     State state() const
     {
         return state_;
@@ -72,10 +93,14 @@ class LoginSession
 
     pppp::Session &session_;
     const Aes128 &cipher_;
+    Reassembler reassembler_;
     State state_ = State::idle;
     std::uint32_t next_app_seq_ = 1;
     std::int64_t token_ = 0;
     bool closed_ = false;
+    bool has_response_ = false;
+    std::int64_t last_response_cmd_ = -1;
+    std::string last_response_json_;
 };
 
 // Extracts an integer field from a flat JSON object. Returns false if the key
