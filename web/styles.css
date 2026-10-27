@@ -125,3 +125,29 @@ footer {
 .build-option h3 {
   margin: 0 0 0.35rem;
 }
+
+.version-picker {
+  margin: 1rem 0;
+}
+
+.version-picker label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+}
+
+.version-picker select {
+  width: 100%;
+  max-width: 28rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid #2b3a4a;
+  background: #0f1821;
+  color: inherit;
+  font: inherit;
+}
+
+#build-info {
+  margin-top: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
