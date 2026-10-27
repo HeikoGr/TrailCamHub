@@ -24,13 +24,21 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Build firmware and merged flash image
+      - name: Build dev and release merged flash images
         shell: bash
         run: |
           source "$IDF_PATH/export.sh"
           idf.py set-target esp32s3
+          # Dev image: default profile, verbose (INFO) logging.
           idf.py build
-          idf.py merge-bin -o trailcamhub-esp32s3-merged.bin
+          idf.py merge-bin -o trailcamhub-esp32s3-dev.bin
+          # Release image: size-optimized, warnings-only logging.
+          idf.py -B build-release \
+            -D IDF_TARGET=esp32s3 \
+            -D SDKCONFIG=build-release/sdkconfig \
+            -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.release" \
+            build
+          idf.py -B build-release merge-bin -o trailcamhub-esp32s3-release.bin
 
       - name: Assemble deployment package
         shell: bash
@@ -42,7 +50,8 @@ jobs:
           cp build/bootloader/bootloader.bin "$package_dir/bootloader.bin"
           cp build/partition_table/partition-table.bin "$package_dir/partition-table.bin"
           cp build/ota_data_initial.bin "$package_dir/ota_data_initial.bin"
-          cp build/trailcamhub-esp32s3-merged.bin "$package_dir/trailcamhub-esp32s3.bin"
+          cp build/trailcamhub-esp32s3-dev.bin "$package_dir/trailcamhub-esp32s3-dev.bin"
+          cp build-release/trailcamhub-esp32s3-release.bin "$package_dir/trailcamhub-esp32s3-release.bin"
           cp build/flasher_args.json "$package_dir/flasher_args.json"
           cp deployment/README.md "$package_dir/README.md"
           printf 'Git commit: %s\nESP-IDF: v5.3.6\nTarget: esp32s3\n' \
@@ -158,10 +167,15 @@ jobs:
           mkdir -p site
           tar -xzf artifact/trailcamhub-esp32s3.tar.gz -C artifact
           cp web/index.html web/styles.css web/serial-console.js site/
-          cp artifact/trailcamhub-esp32s3/trailcamhub-esp32s3.bin site/
-          sha256sum site/trailcamhub-esp32s3.bin | sed 's|site/||' > site/SHA256SUMS
+          cp artifact/trailcamhub-esp32s3/trailcamhub-esp32s3-dev.bin site/
+          cp artifact/trailcamhub-esp32s3/trailcamhub-esp32s3-release.bin site/
+          (cd site && sha256sum trailcamhub-esp32s3-dev.bin \
+            trailcamhub-esp32s3-release.bin > SHA256SUMS)
           version="0.0.0-${GITHUB_SHA:0:7}"
-          jq --arg version "$version" '.version = $version' web/manifest.json > site/manifest.json
+          jq --arg version "$version" '.version = $version' \
+            web/manifest-dev.json > site/manifest-dev.json
+          jq --arg version "$version" '.version = $version' \
+            web/manifest-release.json > site/manifest-release.json
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
