@@ -1,5 +1,6 @@
 #include "artemis_reassembler.hpp"
 
+#include <algorithm>
 #include <cstring>
 
 namespace camera::artemis
@@ -32,14 +33,18 @@ Reassembler::Status Reassembler::feed(const std::uint8_t *payload,
         buffer_.insert(buffer_.end(), payload, payload + size);
     }
 
-    // Need the header before the total length is known.
-    if (buffer_.size() < kHeaderSize)
-        return Status::incomplete;
-
-    if (std::memcmp(buffer_.data(), kSignature, sizeof(kSignature)) != 0) {
+    // Reject as soon as the accumulated prefix cannot be the ARTEMIS header,
+    // so stray bytes (e.g. a handshake "ACK" DATA payload) never get prepended
+    // to the next real message.
+    const std::size_t checked = std::min(buffer_.size(), sizeof(kSignature));
+    if (std::memcmp(buffer_.data(), kSignature, checked) != 0) {
         buffer_.clear();
         return Status::invalid;
     }
+
+    // Need the whole header before the total length is known.
+    if (buffer_.size() < kHeaderSize)
+        return Status::incomplete;
 
     const std::uint32_t payload_len = read_u32_le(buffer_.data() + 16);
     if (buffer_.size() < kHeaderSize + payload_len)

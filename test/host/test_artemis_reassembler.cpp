@@ -78,6 +78,17 @@ TEST_CASE("a bad signature is rejected and the buffer cleared")
     CHECK(r.feed(good.data(), good.size()) == Status::complete);
 }
 
+TEST_CASE("a non-ARTEMIS prefix such as a handshake ACK is rejected")
+{
+    Reassembler r;
+    const std::uint8_t ack[] = {'A', 'C', 'K'};
+    CHECK(r.feed(ack, sizeof(ack)) == Status::invalid);
+    // A real message fed afterwards still reassembles cleanly.
+    const std::vector<std::uint8_t> msg = message(16);
+    CHECK(r.feed(msg.data(), msg.size()) == Status::complete);
+    CHECK(r.message() == msg);
+}
+
 TEST_CASE("reset discards a partial message")
 {
     const std::vector<std::uint8_t> msg = message(100);

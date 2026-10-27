@@ -4,8 +4,10 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <string>
 #include <time.h>
 #include <unistd.h>
+#include <vector>
 
 #include "esp_log.h"
 #include "esp_random.h"
@@ -15,6 +17,10 @@
 #include "mbedtls/aes.h"
 #include "lwip/sockets.h"
 
+#include "artemis_crypto.hpp"
+#include "artemis_login.hpp"
+#include "artemis_message.hpp"
+#include "artemis_reassembler.hpp"
 #include "camera_prelogin.hpp"
 #include "camera_protocol.h"
 #include "camera_udp_transport.h"
@@ -235,6 +241,13 @@ static UdpTransport s_transport;
 // Static because it holds the DATA packets awaiting acknowledgement.
 static camera::pppp::Session s_session(s_transport);
 
+// ARTEMIS command-channel state, reset at the start of each session.
+static camera::artemis::Aes128 s_command_cipher =
+    camera::artemis::command_cipher();
+static camera::artemis::Reassembler s_response;
+static bool s_logged_in;
+static uint32_t s_next_command_seq;
+
 static bool from_camera(const struct sockaddr_in *source,
                         const struct sockaddr_in *camera_address)
 {
@@ -331,6 +344,68 @@ send_artemis_handshake(int socket_fd, const struct sockaddr_in *camera_address)
                             magic_two);
 }
 
+// Decrypts a received ARTEMIS DATA message (reassembling fragments). On the
+// login response it logs the session token and requests the media list
+// (cmdId 768); any other response is logged as decrypted JSON.
+static void process_artemis_response(const SessionEvent &event)
+{
+    using namespace camera::artemis;
+
+    const Reassembler::Status status =
+        s_response.feed(event.payload, event.payload_size);
+    if (status == Reassembler::Status::incomplete) {
+        return;
+    }
+    if (status == Reassembler::Status::invalid) {
+        s_response.reset();
+        return;
+    }
+
+    Message message;
+    const bool decoded = parse(s_command_cipher, s_response.message().data(),
+                               s_response.message().size(), message);
+    s_response.reset();
+    if (!decoded) {
+        ESP_LOGW(TAG, "Could not decode the ARTEMIS response");
+        return;
+    }
+
+    int64_t cmd_id = -1;
+    json_find_int(message.json, "cmdId", cmd_id);
+
+    if (cmd_id == 0 && !s_logged_in) {
+        int64_t result = -1;
+        int64_t token = 0;
+        if (json_find_int(message.json, "result", result) && result == 0 &&
+            json_find_int(message.json, "token", token)) {
+            s_logged_in = true;
+            ESP_LOGI(TAG, "ARTEMIS login succeeded; token %lld",
+                     (long long)token);
+
+            const std::string request =
+                "{\"cmdId\":768,\"token\":" + std::to_string(token) + "}";
+            const std::vector<uint8_t> packet =
+                build_request(s_command_cipher, s_next_command_seq++, request);
+            uint16_t index = 0;
+            if (!packet.empty() &&
+                s_session.send_data(packet.data(), packet.size(),
+                                    esp_timer_get_time(),
+                                    "ARTEMIS GetMediaList", &index)) {
+                ESP_LOGI(TAG, "Requested media list (cmdId 768), index %u",
+                         index);
+            } else {
+                ESP_LOGE(TAG, "Could not send the media-list request");
+            }
+        } else {
+            ESP_LOGW(TAG, "ARTEMIS login rejected: %s", message.json.c_str());
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "ARTEMIS response cmdId %lld: %s", (long long)cmd_id,
+             message.json.c_str());
+}
+
 // Keeps the ARTEMIS session alive with heartbeats (one at a time, sent
 // after the previous one was acknowledged) and logs everything received
 // until the camera closes the session or a stop is requested.
@@ -345,6 +420,9 @@ wait_for_artemis_packets(int socket_fd,
     int64_t last_heartbeat_us = 0;
     const int64_t heartbeat_interval_us =
         CAMERA_RUDP_HEARTBEAT_INTERVAL_MS * 1000LL;
+    s_response.reset();
+    s_logged_in = false;
+    s_next_command_seq = 2;
     ESP_LOGI(TAG, "Starting ARTEMIS heartbeat loop");
 
     while (!stop_requested()) {
@@ -417,10 +495,14 @@ wait_for_artemis_packets(int socket_fd,
             !s_session.is_outstanding(heartbeat_index)) {
             ESP_LOGI(TAG, "Heartbeat index %u acknowledged", heartbeat_index);
             heartbeat_pending = false;
-        } else if (log_session_event(event, packet,
-                                     static_cast<size_t>(received),
-                                     "in the ARTEMIS session")) {
-            return ESP_ERR_INVALID_STATE;
+        } else {
+            if (log_session_event(event, packet, static_cast<size_t>(received),
+                                  "in the ARTEMIS session")) {
+                return ESP_ERR_INVALID_STATE;
+            }
+            if (event.type == SessionEvent::Type::data) {
+                process_artemis_response(event);
+            }
         }
     }
     return ESP_OK;
