@@ -347,10 +347,13 @@ send_artemis_handshake(int socket_fd, const struct sockaddr_in *camera_address)
                             magic_two);
 }
 
-// Sends a token-authenticated ARTEMIS command over the session.
-static bool send_artemis_command(uint32_t cmd_id, const char *context)
+// Sends a token-authenticated ARTEMIS command over the session. `extra_fields`
+// is inserted verbatim after cmdId (e.g. ",\"pageNo\":0"); it may be empty.
+static bool send_artemis_command(uint32_t cmd_id, const char *extra_fields,
+                                 const char *context)
 {
     const std::string json = "{\"cmdId\":" + std::to_string(cmd_id) +
+                             extra_fields +
                              ",\"token\":" + std::to_string(s_token) + "}";
     const std::vector<uint8_t> packet = camera::artemis::build_request(
         s_command_cipher, s_next_command_seq++, json);
@@ -419,9 +422,11 @@ static void process_artemis_response(const SessionEvent &event)
              message.json.c_str());
 
     // After the device-info reply, request the media list (as the app does).
+    // cmdId 768 requires paging parameters, or the camera does not answer.
     if (cmd_id == 512 && s_logged_in && !s_media_requested) {
         s_media_requested = true;
-        send_artemis_command(768, "ARTEMIS GetMediaList");
+        send_artemis_command(768, ",\"itemCntPerPage\":45,\"pageNo\":0",
+                             "ARTEMIS GetMediaList");
     }
 }
 
@@ -523,7 +528,7 @@ wait_for_artemis_packets(int socket_fd,
             // first command, as the app does, starting with device info.
             if (s_logged_in && !s_devinfo_requested) {
                 s_devinfo_requested = true;
-                send_artemis_command(512, "ARTEMIS GetDevInfo");
+                send_artemis_command(512, "", "ARTEMIS GetDevInfo");
             }
         } else {
             if (log_session_event(event, packet, static_cast<size_t>(received),
