@@ -74,6 +74,30 @@ TEST_CASE("parse() decodes a captured login response message")
           "\"errorMsg\":\"Success\"}");
 }
 
+TEST_CASE("parse() handles a PayloadLen that includes NUL and zero padding")
+{
+    Aes128 cipher = command_cipher();
+    // The real camera's login response: a 108-char Base64 string, but
+    // PayloadLen is 129 (0x81) because it also counts the NUL terminator and
+    // trailing zero padding.
+    const std::string b64 =
+        "7sQ3+pH/khrx+xvDdflBd8zgJF1T4ImASXycUhSI4p9PW9TYvHzT6Tuh"
+        "7qFyCvRTmd4sQESImycJCGKho43h1WULW93yE+lNbmV4tSFUgyA=";
+
+    std::vector<std::uint8_t> msg = {'A', 'R', 'T', 'E', 'M', 'I', 'S', 0};
+    append_u32_le(msg, kMsgResponse);
+    append_u32_le(msg, 1);
+    append_u32_le(msg, static_cast<std::uint32_t>(b64.size()) + 21);
+    msg.insert(msg.end(), b64.begin(), b64.end());
+    msg.resize(msg.size() + 21, 0);  // NUL terminator + zero padding
+
+    Message parsed;
+    REQUIRE(parse(cipher, msg.data(), msg.size(), parsed));
+    CHECK(parsed.json ==
+          "{\"cmdId\":0,\"result\":0,\"token\":113034621,\"bat_percent\":80,"
+          "\"errorMsg\":\"Success\"}");
+}
+
 TEST_CASE("parse() rejects malformed messages")
 {
     Aes128 cipher = command_cipher();
