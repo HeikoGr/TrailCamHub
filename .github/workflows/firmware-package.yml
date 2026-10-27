@@ -133,7 +133,12 @@ jobs:
 
   deploy-installer:
     name: Deploy web installer
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    # Publishes on every push to main, and on a manual "Run workflow" dispatch
+    # from any branch (Actions tab) so a branch build can be put on the public
+    # installer without merging. Pull requests never deploy.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: build
     runs-on: ubuntu-latest
     permissions:

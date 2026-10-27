@@ -8,7 +8,7 @@ For the latest `main` build, use the hosted [TrailCamHub browser installer](http
 
 The page offers two builds: the **development** image with verbose (INFO) serial logging, and the **release** image with size-optimized, warnings-only logging. Both are the same firmware; pick development to watch the protocol in the serial console.
 
-The installer page is deployed by the **Firmware Package** GitHub Actions workflow after pushes to `main`. Pull requests build a package but do not update the public installer. The page's merged images and manifests come from the same workflow build. The default CI firmware sends the `BT_KEY_ON` Wi-Fi-enable payload after BLE discovery.
+The installer page is deployed by the **Firmware Package** GitHub Actions workflow. It updates automatically on every push to `main`, and can also be published from any branch on demand: open the repository's **Actions → Firmware Package → Run workflow**, pick the branch, and run it. That build (both images) is then published to the public installer without merging, so the whole flash cycle can stay in the browser. Pull requests build a package but never update the public installer. The default CI firmware sends the `BT_KEY_ON` Wi-Fi-enable payload after BLE discovery.
 
 ## Flash the merged image
 
