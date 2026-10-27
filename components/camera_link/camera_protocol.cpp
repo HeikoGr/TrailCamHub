@@ -489,7 +489,9 @@ wait_for_artemis_packets(int socket_fd,
             return timeout_error;
         }
 
-        uint8_t packet[camera::ArtemisRudpPacket::kMaxPacketSize];
+        // Static (not on the task stack): a fragment datagram is ~1.6 KB, and
+        // only the single camera session task uses it.
+        static uint8_t packet[camera::ArtemisRudpPacket::kMaxPacketSize];
         struct sockaddr_in source = {};
         ssize_t received = camera_udp_receive_packet(
             socket_fd, packet, sizeof(packet), &source, "ARTEMIS");
