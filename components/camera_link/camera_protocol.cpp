@@ -489,7 +489,7 @@ wait_for_artemis_packets(int socket_fd,
             return timeout_error;
         }
 
-        uint8_t packet[512];
+        uint8_t packet[camera::ArtemisRudpPacket::kMaxPacketSize];
         struct sockaddr_in source = {};
         ssize_t received = camera_udp_receive_packet(
             socket_fd, packet, sizeof(packet), &source, "ARTEMIS");
