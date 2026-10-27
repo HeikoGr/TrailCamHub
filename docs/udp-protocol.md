@@ -21,7 +21,7 @@ reference treats the encrypted body as an opaque Base64 blob.
 UDP datagram
 └─ PPPP/CS2 reliable-UDP frame      (magic 0xF1, type, length)
    └─ ARTEMIS header                (20 bytes, carried as RUDP DATA payload)
-      └─ Base64( AES-128-ECB( PKCS7( JSON command ) ) ) + 0x00
+      └─ Base64( AES-128-CBC( JSON command ) ) + 0x00
 ```
 
 The camera listens on UDP (discovery is observed on port 40611). A single UDP socket
@@ -103,8 +103,8 @@ An ARTEMIS message is the payload of a DATA frame. Its 20-byte header is: **[ver
 | 0x10 | PayloadLen | 4 | uint32 LE | length of the Base64 string that follows |
 
 After the header comes a `\x00`-terminated **Base64** string. It decodes to an
-AES-128-ECB / PKCS7 block whose plaintext is a JSON object. The AES key is **not**
-included here — see [`protocol-analysis.md`](protocol-analysis.md).
+**AES-128-CBC** block (zero IV) whose plaintext is a NUL-terminated JSON object. The key
+and cipher parameters are documented in [`protocol-analysis.md`](protocol-analysis.md).
 
 ---
 

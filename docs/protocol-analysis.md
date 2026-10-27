@@ -6,36 +6,47 @@ BLE / Wi-Fi / UDP.
 **Cameras observed:** TC100 (own hardware) and KJK230 (public reference captures from
 the open-source `pi_trailcam` project).
 
-> **Policy note.** This document records only observations from *our own* device
-> traffic and from public open-source captures. It contains **no** extracted vendor
-> key and **no** instructions for defeating the payload encryption. The encrypted
-> payload layer is deliberately left closed (see "Open points"). This is consistent
-> with the project goal of interoperability with a user-owned camera, not copying or
-> circumventing the proprietary app.
+> **Note on keys.** The cryptographic constants used by this camera family are already
+> published in public reverse-engineering projects (see "Sources"). This document
+> reuses those public constants for interoperability with a user-owned camera. This is
+> consistent with the project goal of interoperability, not copying or distributing the
+> proprietary app.
 
 ---
 
 ## 1. Key finding
 
 There is **no runtime key exchange.** The protocol uses a **two-key model** with two
-*fixed* AES-128-ECB keys:
+*fixed* keys, both of which are publicly documented:
 
-| Stage | Purpose | Key | Status |
+| Stage | Purpose | Key | Source |
 |---|---|---|---|
-| **Bootstrap** | only the PRE-LOGIN handshake (`0xF9`), which carries a nonce + time | a publicly documented 16-byte constant (see `pi_trailcam`) | known |
-| **Payload** | all ARTEMIS payloads (login, heartbeat, commands, responses) | a different, **fixed, family-wide** constant | **unknown** |
+| **Bootstrap** | only the PRE-LOGIN handshake (`0xF9`), which carries a nonce + time | `a01bc23ed45fF56A` | `pi_trailcam` |
+| **Payload** | all ARTEMIS payloads (login, heartbeat, commands, responses) | `xs38nul7cqf7m1va` | `trailcam-automation` |
 
-Both keys are static. The payload key is **not** negotiated per session and **not**
-derived per device.
+Both keys are static constants shared across the camera family; neither is negotiated
+per session or per device.
+
+### Command-channel parameters (payload stage)
+
+| Parameter | Value |
+|---|---|
+| Algorithm | **AES-128-CBC** |
+| Key | `xs38nul7cqf7m1va` (16 ASCII bytes) |
+| IV | 16 zero bytes (`00 … 00`) |
+| Body | JSON, NUL-terminated, then padded to the 16-byte block size |
+
+Single-block messages (e.g. the heartbeat) are indistinguishable from ECB, which is why
+an early look suggested ECB; the multi-block login exchange shows it is CBC with a zero
+IV.
 
 ---
 
 ## 2. Evidence
 
-### 2.1 The bootstrap key only decrypts the handshake
-The public bootstrap constant decrypts the PRE-LOGIN payload cleanly into a small JSON
-object of the form `{"utcTime":<n>,"nonce":"<hex>"}`. The same constant produces only
-garbage on the actual ARTEMIS payloads (heartbeat, login response).
+### 2.1 The bootstrap key only covers the handshake
+The bootstrap key decrypts the PRE-LOGIN payload cleanly into a small JSON object of the
+form `{"utcTime":<n>,"nonce":"<hex>"}`. It does **not** decrypt the ARTEMIS payloads.
 
 ### 2.2 The payload key is a family-wide constant
 The heartbeat plaintext `{"cmdId":525}` encrypts to the Base64 block
@@ -44,26 +55,22 @@ The heartbeat plaintext `{"cmdId":525}` encrypts to the Base64 block
 - the **TC100** (our own capture), and
 - the **KJK230** (`pi_trailcam/tests/debug06012026_2.log:43`).
 
-Identical plaintext → identical ciphertext → on **two different devices**. Under
-AES-ECB this is only possible if both devices use the same static key. A per-session or
-per-device key would produce different ciphertext.
+Identical plaintext → identical ciphertext → on two different devices, which is only
+possible with a shared static key.
 
-### 2.3 The payload key is NOT the bootstrap key
-Encrypting `{"cmdId":525}` with the bootstrap constant yields a different block than
-`MzlB…`. The bootstrap and payload keys are therefore distinct.
+### 2.3 Verification against real captures
+Decrypting the captured TC100 login exchange with the command-channel parameters above
+yields clean JSON, for example:
 
-### 2.4 The PRE-LOGIN nonce is a red herring
-The genuine vendor app does not send a UDP PRE-LOGIN (`0xF9`) at all; in the reference
-project this step turned out to be a misinterpretation and was removed. Because the
-payloads are encrypted with the fixed payload constant regardless, the nonce plays no
-role in payload encryption.
+```
+login request  -> {"cmdId":0,"usrName":"admin","password":"admin","needVideo":0,
+                   "needAudio":0,"utcTime":<unix>,"supportHeartBeat":true}
+login response -> {"cmdId":0,"result":0,"token":<number>,"bat_percent":<n>,
+                   "errorMsg":"Success"}
+```
 
-### 2.5 Why a brute-force / known-plaintext search does not recover the key
-The payload key is a 16-byte constant, but it is not present as a contiguous string or
-block in the vendor library (a scan over every byte window and every printable string
-of the `.so` and the app's `classes*.dex` files yields no match); it is assembled or
-obfuscated at runtime. AES cannot be inverted from plaintext/ciphertext pairs, so a
-known-plaintext approach does not reveal the key either.
+The login response carries the numeric session `token` that all later commands must
+include.
 
 ---
 
@@ -77,8 +84,8 @@ characteristic `0x0003`), framed with a 4-byte header (`13 57 01 00`) followed b
 {"ret":0,"ssid":"<ap-ssid>","bssid":"<ap-bssid>","pwd":"<ap-password>"}
 ```
 
-This removes the earlier "SSID/password unknown" obstacle: the firmware can read the
-SSID and password directly from this BLE response instead of guessing them.
+So the firmware can read the SSID and password directly from this BLE response instead
+of guessing them.
 
 **BLE parameters (TC100):** service `0x8801`, write characteristic `0x0002`, notify
 characteristic `0x0003`. Wake-up: write `BT_KEY_ON`
@@ -88,43 +95,41 @@ characteristic `0x0003`. Wake-up: write `BT_KEY_ON`
 
 ## 4. UDP/RUDP transport (PPPP/CS2, "Tutk")
 
-- Magic `0xF1`; types: `0xD0` DATA, `0xD1` ACK, `0xE0` ALIVE, `0xF0` CLOSE,
-  `0x41/0x42` LBCS discovery, `0xF9` PRE-LOGIN (unused by the genuine client).
+- Magic `0xF1`; types: `0xD0` DATA, `0xD1` ACK, `0xE0` ALIVE, `0xE1` ALIVE_ACK,
+  `0xF0` CLOSE, `0x41/0x42` LBCS discovery, `0xF9` PRE-LOGIN (unused by the genuine
+  client).
 - ARTEMIS header (20 bytes): `"ARTEMIS\0"` + MsgType (LE; 2 = request, 3 = response)
-  + AppSeq (LE) + PayloadLen (LE). It is followed by `Base64(AES-128-ECB/PKCS7(JSON))`
-  and a terminating `\x00`.
+  + AppSeq (LE) + PayloadLen (LE). It is followed by `Base64(AES-128-CBC(JSON))` and a
+  terminating `\x00`.
 - Commands: `cmdId 0` login (`usrName`/`password` = `admin`); the response carries a
   numeric `token`. `512` devinfo, `525` keepalive (~3 s), `768` file list,
   `772` thumbnails, `258/259` stream. After login, commands carry the token:
   `{"cmdId":512,"token":<number>}`.
-- The real obstacle in the reference project was **not** the cryptography but the
-  **handshake choreography / timing** (discovery stabilization, the Magic1/Magic2
-  packets, sub-10 ms ACK timing, sequence resets).
+- The real obstacle in the reference project was the **handshake choreography / timing**
+  (discovery stabilization, the Magic1/Magic2 packets, sub-10 ms ACK timing, sequence
+  resets), not the cryptography — see [`udp-protocol.md`](udp-protocol.md).
 
 ---
 
-## 5. Consequences for development
+## 5. Status
 
-**Blocked (without reverse-engineering the vendor binary):** reading or writing the
-encrypted JSON bodies — the single fixed payload constant is missing.
+All layers needed to talk to the camera are now understood:
 
-**Buildable without further app disassembly:**
+- **Transport** (RUDP/PPPP), **discovery**, and the **ARTEMIS framing** — documented.
+- **Command-channel encryption** — AES-128-CBC with the public key above.
+- **Wi-Fi credentials** — read from the cleartext BLE response.
 
-1. **BLE credential retrieval** — SSID/BSSID/password from the cleartext BLE JSON
-   (section 3).
-2. **RUDP transport + discovery + ARTEMIS framing + login choreography**, including
-   timing, with the JSON bodies left as placeholders. Host-testable.
-
-Together these provide the complete protocol scaffold, ready to be "armed" once the
-payload constant becomes available through a route that is compatible with the
-project's policy and the applicable terms of use.
+Implementation can proceed: command encryption/decryption, then login → token →
+file list (`768`) → download.
 
 ---
 
-## 6. Sources / artifacts
+## 6. Sources
 
-- Our own hardware captures (TC100): PRE-LOGIN payload, heartbeat, login response.
-- `pi_trailcam` (public): `Protocol_analysis.md`,
-  `tests/MITM_Captures/ble_udp_2.log` (BLE credential JSON),
-  `tests/debug06012026_2.log:43` (on-wire heartbeat, KJK230),
-  `tests/MITM_Captures/App_Log_2025-12-23log.txt` (cleartext commands, token example).
+- [`trailcam-automation`](https://github.com/pwnb0t/trailcam-automation) —
+  publishes the AES command-channel key (`xs38nul7cqf7m1va`) and the zero IV
+  (`src/constants.py`, "AES command channel (from libArLink.so)").
+- [`pi_trailcam`](https://github.com/philibertschlutzki/pi_trailcam) — protocol
+  analysis, command IDs, the PRE-LOGIN bootstrap key, and the capture
+  (`tests/debug06012026_2.log:43`) used for cross-device verification.
+- Own TC100 captures (framing, discovery, heartbeat, login exchange).
