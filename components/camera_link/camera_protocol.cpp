@@ -246,6 +246,9 @@ static camera::artemis::Aes128 s_command_cipher =
     camera::artemis::command_cipher();
 static camera::artemis::Reassembler s_response;
 static bool s_logged_in;
+static int64_t s_token;
+static bool s_devinfo_requested;
+static bool s_media_requested;
 static uint32_t s_next_command_seq;
 
 static bool from_camera(const struct sockaddr_in *source,
@@ -344,9 +347,30 @@ send_artemis_handshake(int socket_fd, const struct sockaddr_in *camera_address)
                             magic_two);
 }
 
+// Sends a token-authenticated ARTEMIS command over the session.
+static bool send_artemis_command(uint32_t cmd_id, const char *context)
+{
+    const std::string json = "{\"cmdId\":" + std::to_string(cmd_id) +
+                             ",\"token\":" + std::to_string(s_token) + "}";
+    const std::vector<uint8_t> packet = camera::artemis::build_request(
+        s_command_cipher, s_next_command_seq++, json);
+    uint16_t index = 0;
+    if (packet.empty() ||
+        !s_session.send_data(packet.data(), packet.size(), esp_timer_get_time(),
+                             context, &index)) {
+        ESP_LOGE(TAG, "Could not send %s", context);
+        return false;
+    }
+    ESP_LOGI(TAG, "Sent %s (cmdId %lu), index %u", context,
+             (unsigned long)cmd_id, index);
+    return true;
+}
+
 // Decrypts a received ARTEMIS DATA message (reassembling fragments). On the
-// login response it logs the session token and requests the media list
-// (cmdId 768); any other response is logged as decrypted JSON.
+// login response it records the session token; the first command is sent only
+// once the session has settled (see the heartbeat-ack path), mirroring the
+// app's order. Other responses are logged as decrypted JSON, and the
+// device-info reply triggers the media-list request.
 static void process_artemis_response(const SessionEvent &event)
 {
     using namespace camera::artemis;
@@ -373,29 +397,18 @@ static void process_artemis_response(const SessionEvent &event)
     int64_t cmd_id = -1;
     json_find_int(message.json, "cmdId", cmd_id);
 
-    if (cmd_id == 0 && !s_logged_in) {
+    if (cmd_id == 0) {
+        if (s_logged_in) {
+            return;
+        }
         int64_t result = -1;
         int64_t token = 0;
         if (json_find_int(message.json, "result", result) && result == 0 &&
             json_find_int(message.json, "token", token)) {
+            s_token = token;
             s_logged_in = true;
             ESP_LOGI(TAG, "ARTEMIS login succeeded; token %lld",
                      (long long)token);
-
-            const std::string request =
-                "{\"cmdId\":768,\"token\":" + std::to_string(token) + "}";
-            const std::vector<uint8_t> packet =
-                build_request(s_command_cipher, s_next_command_seq++, request);
-            uint16_t index = 0;
-            if (!packet.empty() &&
-                s_session.send_data(packet.data(), packet.size(),
-                                    esp_timer_get_time(),
-                                    "ARTEMIS GetMediaList", &index)) {
-                ESP_LOGI(TAG, "Requested media list (cmdId 768), index %u",
-                         index);
-            } else {
-                ESP_LOGE(TAG, "Could not send the media-list request");
-            }
         } else {
             ESP_LOGW(TAG, "ARTEMIS login rejected: %s", message.json.c_str());
         }
@@ -404,6 +417,12 @@ static void process_artemis_response(const SessionEvent &event)
 
     ESP_LOGI(TAG, "ARTEMIS response cmdId %lld: %s", (long long)cmd_id,
              message.json.c_str());
+
+    // After the device-info reply, request the media list (as the app does).
+    if (cmd_id == 512 && s_logged_in && !s_media_requested) {
+        s_media_requested = true;
+        send_artemis_command(768, "ARTEMIS GetMediaList");
+    }
 }
 
 // Keeps the ARTEMIS session alive with heartbeats (one at a time, sent
@@ -422,6 +441,9 @@ wait_for_artemis_packets(int socket_fd,
         CAMERA_RUDP_HEARTBEAT_INTERVAL_MS * 1000LL;
     s_response.reset();
     s_logged_in = false;
+    s_token = 0;
+    s_devinfo_requested = false;
+    s_media_requested = false;
     s_next_command_seq = 2;
     ESP_LOGI(TAG, "Starting ARTEMIS heartbeat loop");
 
@@ -495,6 +517,12 @@ wait_for_artemis_packets(int socket_fd,
             !s_session.is_outstanding(heartbeat_index)) {
             ESP_LOGI(TAG, "Heartbeat index %u acknowledged", heartbeat_index);
             heartbeat_pending = false;
+            // The session is now settled (a heartbeat round-tripped). Send the
+            // first command, as the app does, starting with device info.
+            if (s_logged_in && !s_devinfo_requested) {
+                s_devinfo_requested = true;
+                send_artemis_command(512, "ARTEMIS GetDevInfo");
+            }
         } else {
             if (log_session_event(event, packet, static_cast<size_t>(received),
                                   "in the ARTEMIS session")) {
