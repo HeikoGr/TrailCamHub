@@ -22,7 +22,7 @@ jobs:
       IDF_PATH: /opt/esp/idf
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build dev and release merged flash images
         shell: bash
@@ -63,7 +63,7 @@ jobs:
           )
 
       - name: Upload deployment package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: trailcamhub-esp32s3
           path: dist/trailcamhub-esp32s3.tar.gz
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Run clang-format 18
         shell: bash
@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build and run host tests
         shell: bash
@@ -110,13 +110,13 @@ jobs:
       IDF_PATH: /opt/esp/idf
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: head
 
       - name: Check out pull request base
         if: github.event_name == 'pull_request'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: base
@@ -154,13 +154,13 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
       - name: Download firmware package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: trailcamhub-esp32s3
           path: artifact
@@ -240,4 +240,4 @@ jobs:
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
