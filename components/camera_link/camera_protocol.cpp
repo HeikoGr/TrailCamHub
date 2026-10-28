@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <string>
 #include <time.h>
@@ -24,8 +25,11 @@
 #include "camera_prelogin.hpp"
 #include "camera_protocol.h"
 #include "camera_udp_transport.h"
+#include "bulk_reassembler.hpp"
 #include "camera_udp_packets.hpp"
+#include "mbedtls/base64.h"
 #include "media_list.hpp"
+#include "media_transfer.hpp"
 #include "pppp_session.hpp"
 
 #define CAMERA_DISCOVERY_LOCAL_PORT 35281
@@ -252,6 +256,11 @@ static bool s_devinfo_requested;
 static bool s_media_requested;
 static bool s_thumbnail_requested;
 static uint32_t s_next_command_seq;
+static camera::artemis::BulkReassembler s_bulk;
+static uint8_t s_bulk_subtype;
+static uint16_t s_bulk_window[16];
+static size_t s_bulk_window_count;
+static bool s_bulk_active;
 
 static bool from_camera(const struct sockaddr_in *source,
                         const struct sockaddr_in *camera_address)
@@ -369,6 +378,125 @@ static bool send_artemis_command(uint32_t cmd_id, const char *extra_fields,
     ESP_LOGI(TAG, "Sent %s (cmdId %lu), index %u", context,
              (unsigned long)cmd_id, index);
     return true;
+}
+
+// Pushes a sequence into the small ACK window (deduplicated, most-recent kept).
+static void bulk_window_push(uint16_t seq)
+{
+    const size_t cap = sizeof(s_bulk_window) / sizeof(s_bulk_window[0]);
+    for (size_t i = 0; i < s_bulk_window_count; ++i) {
+        if (s_bulk_window[i] == seq) {
+            return;
+        }
+    }
+    if (s_bulk_window_count < cap) {
+        s_bulk_window[s_bulk_window_count++] = seq;
+    } else {
+        for (size_t i = 1; i < cap; ++i) {
+            s_bulk_window[i - 1] = s_bulk_window[i];
+        }
+        s_bulk_window[cap - 1] = seq;
+    }
+}
+
+// Emits a completed JPEG over serial as Base64 (line-wrapped, with THUMB
+// markers the web view can capture), guarded against oversized payloads.
+static void
+emit_thumbnail_jpeg(const uint8_t *jpeg, size_t jpeg_size,
+                    const camera::artemis::MediaRecordHeader &header)
+{
+    if (jpeg_size == 0 || jpeg_size > 512u * 1024u) {
+        return;
+    }
+    const size_t b64_cap = ((jpeg_size + 2) / 3) * 4 + 1;
+    uint8_t *b64 = static_cast<uint8_t *>(malloc(b64_cap));
+    if (b64 == nullptr) {
+        ESP_LOGW(TAG, "THUMB b64: out of memory for %u bytes",
+                 (unsigned)jpeg_size);
+        return;
+    }
+    size_t olen = 0;
+    if (mbedtls_base64_encode(b64, b64_cap, &olen, jpeg, jpeg_size) == 0) {
+        ESP_LOGI(TAG, "THUMB JPEG dir=%lld num=%lld bytes=%u",
+                 (long long)header.dir_num, (long long)header.media_num,
+                 (unsigned)jpeg_size);
+        const size_t line = 120;
+        for (size_t off = 0; off < olen; off += line) {
+            const size_t n = (olen - off < line) ? (olen - off) : line;
+            ESP_LOGI(TAG, "THUMB b64:%.*s", (int)n,
+                     reinterpret_cast<const char *>(b64) + off);
+        }
+        ESP_LOGI(TAG, "THUMB b64:END");
+    }
+    free(b64);
+}
+
+// Handles one bulk-stream frame (D0/D1 subtype 0x03/0x04): feeds the
+// reassembler, acknowledges the window so the camera advances to the next
+// frames, and on completion extracts and emits the JPEG.
+static void handle_bulk_frame(int socket_fd,
+                              const struct sockaddr_in *camera_address,
+                              const uint8_t *packet, size_t size)
+{
+    using namespace camera::artemis;
+    const uint8_t subtype = packet[5];
+    const uint16_t seq = static_cast<uint16_t>((packet[6] << 8) | packet[7]);
+    const uint8_t *payload = packet + 8;
+    const size_t payload_len = size - 8;
+
+    if (!s_bulk_active || subtype != s_bulk_subtype) {
+        s_bulk.reset();
+        s_bulk_window_count = 0;
+        s_bulk_subtype = subtype;
+        s_bulk_active = true;
+    }
+
+    const size_t before = s_bulk.received_frames();
+    const BulkReassembler::Status status =
+        s_bulk.feed(seq, payload, payload_len);
+
+    // Acknowledge the window so the camera keeps streaming.
+    bulk_window_push(seq);
+    camera::ArtemisBulkAckRequest ack;
+    if (ack.build(subtype, s_bulk_window, s_bulk_window_count)) {
+        send_udp_request(socket_fd, camera_address, "BULK ACK", ack);
+    }
+
+    if (s_bulk.received_frames() > before) {
+        ESP_LOGI(TAG, "BULK subtype 0x%02x seq %u (%u/%u frames, %u bytes)",
+                 (unsigned)subtype, (unsigned)seq,
+                 (unsigned)s_bulk.received_frames(),
+                 (unsigned)s_bulk.total_frames(),
+                 (unsigned)s_bulk.received_bytes());
+    }
+
+    if (status == BulkReassembler::Status::invalid) {
+        ESP_LOGW(TAG, "BULK subtype 0x%02x: invalid record, resetting",
+                 (unsigned)subtype);
+        s_bulk.reset();
+        s_bulk_window_count = 0;
+        s_bulk_active = false;
+        return;
+    }
+    if (status == BulkReassembler::Status::complete) {
+        MediaRecordHeader header;
+        size_t jpeg_offset = 0;
+        size_t jpeg_size = 0;
+        if (parse_media_record(s_bulk.payload(), s_bulk.payload_size(), header,
+                               jpeg_offset, jpeg_size)) {
+            ESP_LOGI(TAG,
+                     "BULK subtype 0x%02x complete: %u record bytes, "
+                     "%u JPEG bytes (dir %lld num %lld)",
+                     (unsigned)subtype, (unsigned)s_bulk.received_bytes(),
+                     (unsigned)jpeg_size, (long long)header.dir_num,
+                     (long long)header.media_num);
+            emit_thumbnail_jpeg(s_bulk.payload() + jpeg_offset, jpeg_size,
+                                header);
+        }
+        s_bulk.reset();
+        s_bulk_window_count = 0;
+        s_bulk_active = false;
+    }
 }
 
 // Decrypts a received ARTEMIS DATA message (reassembling fragments). On the
@@ -498,6 +626,10 @@ wait_for_artemis_packets(int socket_fd,
     s_media_requested = false;
     s_thumbnail_requested = false;
     s_next_command_seq = 2;
+    s_bulk.reset();
+    s_bulk_subtype = 0;
+    s_bulk_window_count = 0;
+    s_bulk_active = false;
     ESP_LOGI(TAG, "Starting ARTEMIS heartbeat loop");
 
     while (!stop_requested()) {
@@ -563,24 +695,16 @@ wait_for_artemis_packets(int socket_fd,
             TAG, "ARTEMIS packet received +%lld ms since discovery",
             (long long)((esp_timer_get_time() - discovery_started_us) / 1000));
 
-        // Recon: the bulk data channel uses D0/D1 frames on a non-zero
-        // subtype (0x03 photo, 0x04 thumbnail). The session's parser rejects
-        // those (it only accepts subtype 0), so log them here before they are
-        // dropped: subtype, 16-bit sequence, lengths, and a hex dump of the
-        // first payload bytes (ARTEMIS header + 72-byte media header + start
-        // of the JPEG). This confirms the framing against the reference.
+        // The bulk data channel uses D0/D1 frames on a non-zero subtype
+        // (0x03 photo, 0x04 thumbnail); the session's RUDP parser only accepts
+        // subtype 0, so handle those here: reassemble the record and ACK the
+        // window so the camera advances. These frames are not session DATA, so
+        // skip handle_packet() for them.
         if (received >= 8 && packet[0] == 0xf1 && packet[1] == 0xd0 &&
             packet[4] == 0xd1 && packet[5] != 0x00) {
-            const unsigned subtype = packet[5];
-            const unsigned seq16 = (packet[6] << 8) | packet[7];
-            const unsigned body_len = (packet[2] << 8) | packet[3];
-            const size_t payload_len = static_cast<size_t>(received) - 8;
-            ESP_LOGI(TAG,
-                     "BULK frame: subtype 0x%02x seq %u body_len %u "
-                     "payload %u bytes",
-                     subtype, seq16, body_len, (unsigned)payload_len);
-            const size_t dump = payload_len < 128 ? payload_len : 128;
-            ESP_LOG_BUFFER_HEX(TAG, packet + 8, dump);
+            handle_bulk_frame(socket_fd, camera_address, packet,
+                              static_cast<size_t>(received));
+            continue;
         }
 
         const SessionEvent event =

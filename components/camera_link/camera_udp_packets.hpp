@@ -148,6 +148,25 @@ class ArtemisAckRequest final : public ArtemisRudpPacket
     bool build(std::uint16_t received_index);
 };
 
+// Acknowledges a window of bulk-stream frames on a non-zero subtype
+// (0x03 photo, 0x04 thumbnail): F1 D1 <body_len:2> D1 <subtype> 00 <count>
+// <seq:2>*count, with the sequences big-endian. Acknowledging received frames
+// is what makes the camera advance to the next ones.
+class ArtemisBulkAckRequest final : public UdpRequest
+{
+  public:
+    static constexpr std::size_t kMaxSeqs = 64;
+
+    bool build(std::uint8_t subtype, const std::uint16_t *seqs,
+               std::size_t count);
+    const std::uint8_t *data() const override;
+    std::size_t size() const override;
+
+  private:
+    std::array<std::uint8_t, 8 + kMaxSeqs * 2> bytes_{};
+    std::size_t size_{};
+};
+
 // Handshake packets from the reference implementation, sent with exactly
 // the bytes used so far. In the DRW format they read as ACKs of index 0
 // with inconsistent counts; their purpose is not yet understood.

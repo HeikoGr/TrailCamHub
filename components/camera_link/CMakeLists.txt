@@ -5,6 +5,7 @@ idf_component_register(SRCS "camera_protocol.cpp" "camera_prelogin.cpp"
                             "artemis_json.cpp" "artemis_message.cpp"
                             "artemis_login.cpp" "artemis_reassembler.cpp"
                             "media_list.cpp" "media_transfer.cpp"
+                            "bulk_reassembler.cpp"
                        INCLUDE_DIRS "include"
                        PRIV_INCLUDE_DIRS "."
                        REQUIRES esp_netif
