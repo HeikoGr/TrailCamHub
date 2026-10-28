@@ -9,6 +9,7 @@
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
     <script type="module" src="./serial-console.js"></script>
     <script src="./installer.js" defer></script>
+    <script src="./protocol-view.js" defer></script>
   </head>
   <body>
     <main>
@@ -55,6 +56,35 @@
         </div>
 
         <p class="note">Each build is the CI firmware for the ESP32-S3 at that commit. The firmware activates and talks to a camera only where those connections are authorized.</p>
+      </section>
+
+      <section aria-labelledby="protocol-heading">
+        <div class="pv-head">
+          <h2 id="protocol-heading">Live protocol view</h2>
+          <button id="pv-replay" class="secondary-button" type="button">Replay demo log</button>
+        </div>
+        <p>Decodes the serial log as it streams in: the camera session's progress, the parsed media list, and the raw thumbnail/photo bulk frames. Connect the serial console below to drive it live, or replay a bundled sample.</p>
+
+        <ol id="pv-timeline" class="pv-timeline" aria-label="Session progress"></ol>
+
+        <div id="pv-media" class="pv-media" hidden>
+          <h3>Media list</h3>
+          <p id="pv-media-caption" class="note">&nbsp;</p>
+          <div class="pv-table-scroll">
+            <table class="pv-table">
+              <thead>
+                <tr><th>#</th><th>Type</th><th>Dir</th><th>Num</th><th>mediaId</th><th>Time</th></tr>
+              </thead>
+              <tbody id="pv-media-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="pv-frames" class="pv-frames" hidden>
+          <h3>Bulk frames</h3>
+          <p class="note">Thumbnail/photo data on the bulk channel (D0/D1 subtype 0x03/0x04). Decoded from the recon hex dump: ARTEMIS record header, 72-byte media header, JPEG start.</p>
+          <div id="pv-frames-list"></div>
+        </div>
       </section>
 
       <section aria-labelledby="console-heading">

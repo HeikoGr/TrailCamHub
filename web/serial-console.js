@@ -6,6 +6,7 @@ const status = document.querySelector("#serial-status");
 let port;
 let reader;
 let reading = false;
+let lineBuffer = "";
 
 function appendOutput(text) {
   output.textContent += text;
@@ -13,6 +14,19 @@ function appendOutput(text) {
     output.textContent = output.textContent.slice(-80_000);
   }
   output.scrollTop = output.scrollHeight;
+}
+
+// Splits the incoming stream into complete lines and dispatches each as a
+// "serial-line" event, so the live protocol view can decode it. The partial
+// trailing line is held until its newline arrives.
+function dispatchLines(text) {
+  lineBuffer += text;
+  let newline;
+  while ((newline = lineBuffer.indexOf("\n")) !== -1) {
+    const line = lineBuffer.slice(0, newline).replace(/\r$/, "");
+    lineBuffer = lineBuffer.slice(newline + 1);
+    window.dispatchEvent(new CustomEvent("serial-line", { detail: line }));
+  }
 }
 
 async function disconnect() {
@@ -36,6 +50,8 @@ async function connect() {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
     reading = true;
+    lineBuffer = "";
+    window.dispatchEvent(new CustomEvent("serial-reset"));
     connectButton.disabled = true;
     disconnectButton.disabled = false;
     status.textContent = "Connected at 115200 baud";
@@ -49,7 +65,9 @@ async function connect() {
           if (done) {
             break;
           }
-          appendOutput(decoder.decode(value, { stream: true }));
+          const chunk = decoder.decode(value, { stream: true });
+          appendOutput(chunk);
+          dispatchLines(chunk);
         }
       } finally {
         reader.releaseLock();
