@@ -14,7 +14,7 @@ static void log_packet_contents(const uint8_t *packet, size_t packet_len)
 #if CONFIG_CAMERA_UDP_LOG_PACKET_HEX
     // Streams the packet in 16-byte lines through a small internal buffer
     // instead of formatting the whole packet on the caller's stack.
-    ESP_LOG_BUFFER_HEX_LEVEL(TAG, packet, packet_len, ESP_LOG_INFO);
+    ESP_LOG_BUFFER_HEX_LEVEL(TAG, packet, packet_len, ESP_LOG_DEBUG);
 #else
     (void)packet;
     (void)packet_len;
@@ -37,7 +37,7 @@ ssize_t camera_udp_send_packet(int socket_fd, const uint8_t *packet,
         return sent < 0 ? sent : -1;
     }
 
-    ESP_LOGI(TAG, "UDP TX [%s] to " IPSTR ":%u (%u bytes)", context,
+    ESP_LOGD(TAG, "UDP TX [%s] to " IPSTR ":%u (%u bytes)", context,
              IP2STR(&destination_ip), ntohs(destination->sin_port),
              (unsigned)sent);
     log_packet_contents(packet, packet_len);
@@ -57,7 +57,7 @@ ssize_t camera_udp_receive_packet(int socket_fd, uint8_t *packet,
     }
 
     esp_ip4_addr_t source_ip = {.addr = source->sin_addr.s_addr};
-    ESP_LOGI(TAG, "UDP RX [%s] from " IPSTR ":%u (%u bytes)", context,
+    ESP_LOGD(TAG, "UDP RX [%s] from " IPSTR ":%u (%u bytes)", context,
              IP2STR(&source_ip), ntohs(source->sin_port), (unsigned)received);
     log_packet_contents(packet, (size_t)received);
     return received;

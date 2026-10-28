@@ -231,6 +231,40 @@ bool ArtemisAckRequest::build(std::uint16_t received_index)
     return ArtemisRudpPacket::build(kAckType, 1, payload, sizeof(payload));
 }
 
+bool ArtemisBulkAckRequest::build(std::uint8_t subtype,
+                                  const std::uint16_t *seqs, std::size_t count)
+{
+    size_ = 0;
+    if ((count > 0 && seqs == nullptr) || count > kMaxSeqs) {
+        return false;
+    }
+    const std::size_t body_size = 4 + count * 2;  // D1 subtype 00 count + seqs
+    bytes_[0] = 0xf1;
+    bytes_[1] = 0xd1;
+    bytes_[2] = static_cast<std::uint8_t>(body_size >> 8);
+    bytes_[3] = static_cast<std::uint8_t>(body_size);
+    bytes_[4] = 0xd1;
+    bytes_[5] = subtype;
+    bytes_[6] = 0x00;
+    bytes_[7] = static_cast<std::uint8_t>(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        bytes_[8 + i * 2] = static_cast<std::uint8_t>(seqs[i] >> 8);
+        bytes_[8 + i * 2 + 1] = static_cast<std::uint8_t>(seqs[i]);
+    }
+    size_ = 8 + count * 2;
+    return true;
+}
+
+const std::uint8_t *ArtemisBulkAckRequest::data() const
+{
+    return bytes_.data();
+}
+
+std::size_t ArtemisBulkAckRequest::size() const
+{
+    return size_;
+}
+
 bool ArtemisMagicRequest::build(Stage stage)
 {
     static constexpr std::uint8_t kFirstPayload[] = {

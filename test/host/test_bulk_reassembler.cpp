@@ -1,0 +1,150 @@
+#include <doctest/doctest.h>
+
+#include <cstdint>
+#include <vector>
+
+#include "bulk_reassembler.hpp"
+#include "camera_udp_packets.hpp"
+#include "media_transfer.hpp"
+
+using namespace camera::artemis;
+
+namespace
+{
+
+// The first 128 bytes of a real thumbnail bulk frame (subtype 0x04, seq 0,
+// body_len 1028, payload 1024) captured from the camera: ARTEMIS header
+// (ver 8, typ 1, len 0x4b11 = 19217), a 72-byte media header, then the JPEG.
+const std::uint8_t kRealSeq0Prefix[128] = {
+    0x41, 0x52, 0x54, 0x45, 0x4d, 0x49, 0x53, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x11, 0x4b, 0x00, 0x00, 0x46, 0x34, 0x3a, 0x43,
+    0x31, 0x3a, 0x35, 0x36, 0x3a, 0x30, 0x36, 0x3a, 0x45, 0x44, 0x3a, 0x33,
+    0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x2a, 0x00, 0xc9, 0x4a, 0x00, 0x00,
+    0x7c, 0x31, 0xf3, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xd8, 0xff, 0xe0,
+    0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48,
+    0x00, 0x48, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x02, 0x01, 0x01,
+    0x01, 0x01, 0x01, 0x02, 0x01, 0x01, 0x01, 0x02};
+
+constexpr std::size_t kFrame = BulkReassembler::kFramePayload;
+
+// Builds a frame payload of `size` bytes whose every byte equals `fill`.
+std::vector<std::uint8_t> frame(std::size_t size, std::uint8_t fill)
+{
+    return std::vector<std::uint8_t>(size, fill);
+}
+
+}  // namespace
+
+TEST_CASE("BulkReassembler parses the ARTEMIS header from the real seq-0 frame")
+{
+    BulkReassembler r;
+    // seq 0 is a full 1024-byte frame; only its first 128 bytes are known.
+    std::vector<std::uint8_t> seq0(kFrame, 0);
+    std::copy(kRealSeq0Prefix, kRealSeq0Prefix + sizeof(kRealSeq0Prefix),
+              seq0.begin());
+
+    CHECK(r.feed(0, seq0.data(), seq0.size()) ==
+          BulkReassembler::Status::incomplete);
+    REQUIRE(r.header_ready());
+    CHECK(r.version() == 8);
+    CHECK(r.type() == 1);
+    CHECK(r.record_len() == 19217);
+    CHECK(r.total_bytes() == 20u + 19217u);
+    CHECK(r.total_frames() == 19);  // ceil(19237 / 1024)
+}
+
+TEST_CASE("BulkReassembler reassembles the full thumbnail record")
+{
+    BulkReassembler r;
+    const std::size_t total = 20 + 19217;  // 19237
+
+    std::vector<std::uint8_t> seq0(kFrame, 0);
+    std::copy(kRealSeq0Prefix, kRealSeq0Prefix + sizeof(kRealSeq0Prefix),
+              seq0.begin());
+    REQUIRE(r.feed(0, seq0.data(), seq0.size()) ==
+            BulkReassembler::Status::incomplete);
+
+    // Feed seq 1..17 as full frames, then the short final frame (seq 18).
+    BulkReassembler::Status status = BulkReassembler::Status::incomplete;
+    for (std::uint16_t s = 1; s <= 17; ++s) {
+        auto f = frame(kFrame, static_cast<std::uint8_t>(s));
+        status = r.feed(s, f.data(), f.size());
+        CHECK(status == BulkReassembler::Status::incomplete);
+    }
+    const std::size_t last = total - 18 * kFrame;  // 805 bytes
+    auto flast = frame(last, 0x18);
+    status = r.feed(18, flast.data(), flast.size());
+
+    REQUIRE(status == BulkReassembler::Status::complete);
+    CHECK(r.received_bytes() == total);
+    CHECK(r.payload_size() == 19217);
+
+    // The record payload is the 72-byte media header + JPEG; parse it.
+    MediaRecordHeader header;
+    std::size_t jpeg_offset = 0;
+    std::size_t jpeg_size = 0;
+    REQUIRE(parse_media_record(r.payload(), r.payload_size(), header,
+                               jpeg_offset, jpeg_size));
+    CHECK(header.dir_num == 100);
+    CHECK(header.media_num == 42);
+    CHECK(jpeg_offset == 72);
+    CHECK(jpeg_size == 19217 - 72);
+    // JPEG SOI sits right after the 72-byte media header.
+    CHECK(r.payload()[72] == 0xff);
+    CHECK(r.payload()[73] == 0xd8);
+}
+
+TEST_CASE("BulkReassembler accepts frames out of order and ignores duplicates")
+{
+    BulkReassembler r;
+    // A small 3-frame record: header says len = 2*1024 + 10 = 2058.
+    std::vector<std::uint8_t> seq0(kFrame, 0);
+    const std::uint8_t sig[8] = {'A', 'R', 'T', 'E', 'M', 'I', 'S', 0};
+    std::copy(sig, sig + 8, seq0.begin());
+    const std::uint32_t len = 2058;  // payload after the 20-byte header
+    seq0[16] = len & 0xff;
+    seq0[17] = (len >> 8) & 0xff;
+    const std::size_t total = 20 + len;  // 2078 -> 3 frames (1024,1024,30)
+
+    auto f1 = frame(kFrame, 0xb1);
+    auto f2 = frame(total - 2 * kFrame, 0xb2);  // 30 bytes
+
+    // Out of order: 2, 0, 2 (dup), 1.
+    CHECK(r.feed(2, f2.data(), f2.size()) ==
+          BulkReassembler::Status::incomplete);
+    CHECK(r.feed(0, seq0.data(), seq0.size()) ==
+          BulkReassembler::Status::incomplete);
+    CHECK(r.feed(2, f2.data(), f2.size()) ==
+          BulkReassembler::Status::incomplete);  // duplicate, no progress
+    CHECK(r.feed(1, f1.data(), f1.size()) == BulkReassembler::Status::complete);
+    CHECK(r.total_frames() == 3);
+    CHECK(r.received_bytes() == total);
+}
+
+TEST_CASE("BulkReassembler rejects a frame without the ARTEMIS signature")
+{
+    BulkReassembler r;
+    auto bad = frame(64, 0x00);
+    CHECK(r.feed(0, bad.data(), bad.size()) ==
+          BulkReassembler::Status::invalid);
+}
+
+TEST_CASE("ArtemisBulkAckRequest builds a windowed ACK")
+{
+    camera::ArtemisBulkAckRequest ack;
+    const std::uint16_t seqs[] = {0, 1, 2};
+    REQUIRE(ack.build(0x04, seqs, 3));
+    const std::uint8_t expected[] = {0xf1, 0xd1, 0x00, 0x0a, 0xd1, 0x04, 0x00,
+                                     0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x02};
+    REQUIRE(ack.size() == sizeof(expected));
+    for (std::size_t i = 0; i < sizeof(expected); ++i) {
+        CHECK(ack.data()[i] == expected[i]);
+    }
+    // Too many sequences is rejected.
+    std::vector<std::uint16_t> many(camera::ArtemisBulkAckRequest::kMaxSeqs + 1,
+                                    0);
+    CHECK_FALSE(ack.build(0x04, many.data(), many.size()));
+}
