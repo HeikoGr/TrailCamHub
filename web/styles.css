@@ -151,3 +151,137 @@ footer {
   margin-top: 0.4rem;
   font-variant-numeric: tabular-nums;
 }
+
+/* --- Live protocol view --- */
+
+.pv-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pv-head h2 {
+  margin: 0;
+}
+
+.pv-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 1rem 0 0.5rem;
+  list-style: none;
+}
+
+.pv-stage {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid #2b3a4a;
+  border-radius: 999px;
+  background: #0f1821;
+  font-size: 0.85rem;
+  color: #bac8d5;
+}
+
+.pv-stage .pv-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: #3a4a5b;
+  flex: none;
+}
+
+.pv-stage.active {
+  border-color: #90c8ff;
+  color: #e8edf2;
+}
+
+.pv-stage.active .pv-dot {
+  background: #90c8ff;
+  box-shadow: 0 0 0 3px rgba(144, 200, 255, 0.25);
+}
+
+.pv-stage.done {
+  color: #cfe9cf;
+}
+
+.pv-stage.done .pv-dot {
+  background: #6bd08a;
+}
+
+.pv-stage-note {
+  color: #8eb5dc;
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-media,
+.pv-frames {
+  margin-top: 1.25rem;
+}
+
+.pv-media h3,
+.pv-frames h3 {
+  margin: 0 0 0.35rem;
+}
+
+.pv-table-scroll {
+  overflow-x: auto;
+}
+
+.pv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-table th,
+.pv-table td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid #243342;
+  white-space: nowrap;
+}
+
+.pv-table th {
+  color: #8eb5dc;
+  font-weight: 600;
+}
+
+.pv-table tbody tr:hover {
+  background: #1d2834;
+}
+
+.pv-frame {
+  margin-top: 0.75rem;
+  border: 1px solid #2b3a4a;
+  border-radius: 10px;
+  padding: 0.75rem;
+  background: #0f1821;
+}
+
+.pv-frame-head {
+  font-weight: 700;
+  color: #e8edf2;
+}
+
+.pv-frame-note {
+  margin-top: 0.25rem;
+  font-size: 0.85rem;
+  color: #8eb5dc;
+}
+
+.pv-hex {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem;
+  border-radius: 6px;
+  background: #090d11;
+  color: #b8e3b8;
+  font-size: 0.8rem;
+  overflow-x: auto;
+  white-space: pre;
+}
