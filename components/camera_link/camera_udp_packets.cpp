@@ -171,7 +171,8 @@ std::uint16_t ArtemisRudpPacket::header_word() const
 
 bool ArtemisRudpPacket::is_data() const
 {
-    return size_ >= kHeaderSize && bytes_[1] == kDataType;
+    return size_ >= kHeaderSize &&
+           (bytes_[1] == kDataType || bytes_[1] == kFragType);
 }
 
 bool ArtemisRudpPacket::is_ack() const

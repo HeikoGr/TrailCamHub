@@ -105,6 +105,8 @@ class ArtemisRudpPacket : public UdpRequest
     static constexpr std::size_t kHeaderSize = 8;
     static constexpr std::size_t kMaxPacketSize = 512;
     static constexpr std::uint8_t kDataType = 0xd0;
+    // A fragment of a larger ARTEMIS message; same DRW framing as DATA.
+    static constexpr std::uint8_t kFragType = 0x42;
     static constexpr std::uint8_t kAckType = 0xd1;
     static constexpr std::uint8_t kChannel = 0;
 

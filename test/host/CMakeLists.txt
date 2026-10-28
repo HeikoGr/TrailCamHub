@@ -30,6 +30,10 @@ add_executable(host_tests
     test_ble_wifi_response.cpp
     test_gatt_profile.cpp
     test_hex_payload.cpp
+    test_artemis_crypto.cpp
+    test_artemis_login.cpp
+    test_artemis_message.cpp
+    test_artemis_reassembler.cpp
     test_pppp_session.cpp
     test_prelogin.cpp
     test_session_fsm.cpp
@@ -38,6 +42,11 @@ add_executable(host_tests
     ${ble_dir}/ble_wifi_response.cpp
     ${ble_dir}/gatt_profile.cpp
     ${ble_dir}/hex_payload.cpp
+    ${link_dir}/artemis_aes128.cpp
+    ${link_dir}/artemis_crypto.cpp
+    ${link_dir}/artemis_login.cpp
+    ${link_dir}/artemis_message.cpp
+    ${link_dir}/artemis_reassembler.cpp
     ${link_dir}/camera_prelogin.cpp
     ${link_dir}/camera_udp_packets.cpp
     ${link_dir}/pppp_session.cpp
