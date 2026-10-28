@@ -100,11 +100,12 @@ An ARTEMIS message is the payload of a DATA frame. Its 20-byte header is: **[ver
 | 0x00 | Signature | 8 | ASCII | `"ARTEMIS\0"` (`41 52 54 45 4D 49 53 00`) |
 | 0x08 | MsgType | 4 | uint32 LE | `2` = request, `3` = response |
 | 0x0C | AppSeq | 4 | uint32 LE | application sequence counter |
-| 0x10 | PayloadLen | 4 | uint32 LE | length of the Base64 string that follows |
+| 0x10 | PayloadLen | 4 | uint32 LE | bytes that follow: Base64 + NUL + zero padding |
 
-After the header comes a `\x00`-terminated **Base64** string. It decodes to an
-**AES-128-CBC** block (zero IV) whose plaintext is a NUL-terminated JSON object. The key
-and cipher parameters are documented in [`protocol-analysis.md`](protocol-analysis.md).
+After the header comes a **Base64** string terminated by `\x00` and then zero-padded;
+`PayloadLen` counts all of it, so the Base64 ends at the first NUL. It decodes (as
+**AES-128-CBC**, zero IV) to a NUL-terminated JSON object. The key and cipher parameters
+are documented in [`protocol-analysis.md`](protocol-analysis.md).
 
 ---
 
@@ -124,22 +125,62 @@ IDs and shapes confirmed against captured app logs)
 | 768 | GET_MEDIA_LIST | C→D | list stored media |
 | 772 | GET_THUMBNAIL | C→D | media thumbnails |
 
+The login, device-info and media-list exchanges below are **[verified on hardware]**
+(TC100, firmware 2.3.0.3, model "Wi-Fi TrailCam" / `LUTRANSTRA`).
+
 ### 5.1 Login (cmdId 0)
 Request (decrypted):
 ```json
 {"cmdId":0,"usrName":"admin","password":"admin","needVideo":0,"needAudio":0,"utcTime":<unix>,"supportHeartBeat":true}
 ```
-Response carries `errorCode:0` on success and a numeric `token` used by subsequent
-commands, e.g. `{"cmdId":512,"token":<number>}`.
+Response:
+```json
+{"cmdId":0,"result":0,"token":<number>,"bat_percent":<n>,"errorMsg":"Success"}
+```
+`result:0` means success; the numeric `token` must be included in every later command.
 
-### 5.2 Heartbeat (cmdId 525)
-Minimal body `{"cmdId":525}`, sent roughly every 3 seconds. The application sequence
-for heartbeats starts at `0x10001`. Because the payload key is unknown, the firmware
-currently replays a precomputed heartbeat frame rather than encrypting one at runtime.
+### 5.2 Command ordering (important)
+The camera is sensitive to *when* and *how* commands are sent:
+- Send the first command only after the session has **settled** — in practice after a
+  heartbeat has been acknowledged. A command fired immediately on the login response (while
+  the camera is still retransmitting it) makes the camera stop responding.
+- As the app does, request **device info (512) first**, then the media list (768).
+- Commands carry the token: `{"cmdId":<id>,...,"token":<number>}`.
 
-### 5.3 Large responses (fragmentation)
-Large results (e.g. media lists, thumbnails) arrive as multiple frames; each fragment
-is acknowledged, and the concatenated payloads form one ARTEMIS message. **[tentative]**
+### 5.3 Device info (cmdId 512)
+Request: `{"cmdId":512,"token":<number>}`. The response is a large JSON object (a few KB,
+fragmented — see §5.6) with device identity and state: `devId`, `fwVerName`, `modelName`,
+`subModelName`, `productId`, `batPercent`, `sdTotalMB`, `sdFreeMB`, a `capability` object,
+`result:0`, etc.
+
+### 5.4 Media list (cmdId 768)
+Request — the paging parameters are **required**, or the camera does not answer:
+```json
+{"cmdId":768,"itemCntPerPage":45,"pageNo":0,"token":<number>}
+```
+Response:
+```json
+{"mediaFiles":[{"fileType":0,"mediaDirNum":100,"mediaNum":36,"durationMs":0,
+                "mediaId":4136037234,"mediaTime":1766505692}, …],
+ "cnt":<n>,"pageNo":0,"getMediaListRet":0,"errorMsg":"Success","result":0,"cmdId":768}
+```
+Per entry: `fileType` (0 and 2 appear paired per capture — photo/video), `mediaDirNum`
++ `mediaNum` address the file (DCIM dir 100), `mediaId` is a 32-bit id for later
+download/thumbnail, `mediaTime` is a Unix timestamp (unreliable while the camera clock
+is unset). Page with `pageNo`.
+
+### 5.5 Heartbeat (cmdId 525)
+Minimal body `{"cmdId":525}`, sent roughly every 3 seconds. The application sequence for
+heartbeats starts at `0x10001`. The firmware currently replays a precomputed heartbeat
+frame rather than encrypting one at runtime.
+
+### 5.6 Large responses (fragmentation) **[verified on hardware]**
+Large results (device info, media list) are split across several DRW DATA frames of
+~1 KB with consecutive indices. Only the **first** fragment carries the 20-byte ARTEMIS
+header; the rest are raw continuation. Concatenating the DATA payloads and reading the
+header's `PayloadLen` (total Base64 + NUL + padding) reassembles the whole message, which
+is then decoded as one unit. Each fragment is individually acknowledged. A datagram can be
+~1.6 KB, so the receive path must not assume a small MTU.
 
 ---
 
@@ -152,31 +193,32 @@ Driven by the session state machine
 idle → ble_activation → wifi_join → session → (backoff → …)
 ```
 
-Within the UDP session: **[verified for discovery/ALIVE/ACK; tentative for login order]**
+Within the UDP session (**verified on hardware**):
 
 ```
-Discovery (LBCS)  →  [stabilization pause]  →  Login handshake  →  Heartbeats + commands
+Discovery (LBCS) → PRE_LOGIN (0xF9) → camera "ACK" DATA → ARTEMIS login (cmdId 0)
+→ Magic1/Magic2 → heartbeats → login response (token)
+→ [settle: wait for a heartbeat ACK] → device info (512) → media list (768)
 ```
 
 ---
 
-## 7. Login handshake and timing (the hard part)
+## 7. Login handshake and timing
 
-Reference work shows that the difficulty is **not** cryptographic but lies in the exact
-handshake choreography and timing. **[tentative — from reference captures]**
+This flow is **verified on hardware** (the earlier belief, from reference captures, that
+the genuine client skips the UDP `PRE_LOGIN` did not match our camera — the firmware's
+PRE_LOGIN flow works). Notes that matter for a reliable session:
 
-- The genuine client does **not** send a UDP `PRE_LOGIN` (`0xF9`); it is present in our
-  code but is not part of the working flow (see `protocol-analysis.md` §2.4).
-- After discovery, a short stabilization pause (~1 s) is needed so the camera leaves
-  discovery mode before login.
-- Two "magic" ACK-shaped frames (`Magic1`, `Magic2`) are exchanged around login. Their
-  exact purpose is **not yet understood**; in our code they are sent with fixed bytes.
-- The second login attempt must follow the camera's ACK almost immediately
-  (sub-10 ms observed); a delay causes the camera to drop the session with CLOSE.
-- The PPPP sequence counter is sometimes reset/resynchronized after the magic frames.
-
-These timing constraints are the main open engineering problem for a reliable login,
-independent of the encryption question.
+- After discovery, a short stabilization pause helps the camera leave discovery mode
+  before login.
+- Two "magic" ACK-shaped frames (`Magic1`, `Magic2`) are sent around login with fixed
+  bytes; their exact purpose is not fully understood but the sequence works.
+- **Settle before commanding:** send the first application command only after a heartbeat
+  has been acknowledged. Commanding immediately (while the camera still retransmits the
+  login response) makes the camera stop responding.
+- **Device info before media list**, and `768` only with its paging parameters (§5.4).
+- The camera retransmits unacknowledged DATA (including each response fragment) until it
+  is acknowledged, so every received DATA/fragment must be ACKed promptly.
 
 ---
 
