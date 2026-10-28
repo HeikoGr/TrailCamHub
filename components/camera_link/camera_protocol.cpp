@@ -462,10 +462,10 @@ static void handle_bulk_frame(int socket_fd,
         send_udp_request(socket_fd, camera_address, "BULK ACK", ack);
     }
 
-    if (s_bulk.received_frames() > before) {
+    const size_t frames = s_bulk.received_frames();
+    if (frames > before && (frames == 1 || frames % 8 == 0)) {
         ESP_LOGI(TAG, "BULK subtype 0x%02x seq %u (%u/%u frames, %u bytes)",
-                 (unsigned)subtype, (unsigned)seq,
-                 (unsigned)s_bulk.received_frames(),
+                 (unsigned)subtype, (unsigned)seq, (unsigned)frames,
                  (unsigned)s_bulk.total_frames(),
                  (unsigned)s_bulk.received_bytes());
     }
@@ -634,7 +634,10 @@ wait_for_artemis_packets(int socket_fd,
 
     while (!stop_requested()) {
         int64_t now_us = esp_timer_get_time();
-        if (!heartbeat_pending &&
+        // Pause the session heartbeat during a bulk transfer: it would not be
+        // acknowledged while the camera is streaming, and its retransmissions
+        // only compete with our frame ACKs on the uplink.
+        if (!s_bulk_active && !heartbeat_pending &&
             (last_heartbeat_us == 0 ||
              now_us - last_heartbeat_us >= heartbeat_interval_us)) {
             const uint8_t *body = heartbeat.next_command();
@@ -649,7 +652,7 @@ wait_for_artemis_packets(int socket_fd,
                 ESP_LOGW(TAG, "No free DATA slot for the heartbeat");
             }
         }
-        size_t retransmitted = s_session.poll(now_us);
+        size_t retransmitted = s_bulk_active ? 0 : s_session.poll(now_us);
         if (retransmitted > 0) {
             ESP_LOGW(TAG, "Retransmitted %u unacknowledged DATA packet(s)",
                      (unsigned)retransmitted);
@@ -658,14 +661,18 @@ wait_for_artemis_packets(int socket_fd,
             return ESP_FAIL;
         }
 
-        // Wake up in time for the next retransmission or heartbeat.
-        int64_t timeout_us = s_session.time_until_retransmit_us(
-            now_us, CAMERA_RUDP_RECEIVE_TIMEOUT_MS * 1000LL);
-        if (!heartbeat_pending) {
-            int64_t heartbeat_due_us =
-                heartbeat_interval_us - (now_us - last_heartbeat_us);
-            if (heartbeat_due_us < timeout_us) {
-                timeout_us = heartbeat_due_us;
+        // Wake up in time for the next retransmission or heartbeat. During a
+        // bulk transfer both are paused, so just block for the full interval
+        // and stay responsive to incoming frames.
+        int64_t timeout_us = CAMERA_RUDP_RECEIVE_TIMEOUT_MS * 1000LL;
+        if (!s_bulk_active) {
+            timeout_us = s_session.time_until_retransmit_us(now_us, timeout_us);
+            if (!heartbeat_pending) {
+                int64_t heartbeat_due_us =
+                    heartbeat_interval_us - (now_us - last_heartbeat_us);
+                if (heartbeat_due_us < timeout_us) {
+                    timeout_us = heartbeat_due_us;
+                }
             }
         }
         esp_err_t timeout_error =
