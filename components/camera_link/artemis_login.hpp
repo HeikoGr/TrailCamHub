@@ -11,6 +11,7 @@
 #include <string>
 
 #include "artemis_aes128.hpp"
+#include "artemis_json.hpp"
 #include "artemis_reassembler.hpp"
 #include "pppp_session.hpp"
 
@@ -102,10 +103,5 @@ class LoginSession
     std::int64_t last_response_cmd_ = -1;
     std::string last_response_json_;
 };
-
-// Extracts an integer field from a flat JSON object. Returns false if the key
-// is absent or not followed by an integer. Exposed for testing.
-bool json_find_int(const std::string &json, const std::string &key,
-                   std::int64_t &out);
 
 }  // namespace camera::artemis

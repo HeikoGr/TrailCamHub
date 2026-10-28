@@ -25,6 +25,7 @@
 #include "camera_protocol.h"
 #include "camera_udp_transport.h"
 #include "camera_udp_packets.hpp"
+#include "media_list.hpp"
 #include "pppp_session.hpp"
 
 #define CAMERA_DISCOVERY_LOCAL_PORT 35281
@@ -420,6 +421,37 @@ static void process_artemis_response(const SessionEvent &event)
 
     ESP_LOGI(TAG, "ARTEMIS response cmdId %lld: %s", (long long)cmd_id,
              message.json.c_str());
+
+    // Parse the media list into the typed model and log a short summary, so
+    // the model is exercised against the real response on hardware too.
+    if (cmd_id == 768) {
+        camera::artemis::MediaList list;
+        if (camera::artemis::parse_media_list(message.json, list)) {
+            int photos = 0;
+            int videos = 0;
+            for (const auto &item : list.files) {
+                if (item.file_type == 0)
+                    ++photos;
+                else
+                    ++videos;
+            }
+            ESP_LOGI(TAG,
+                     "Media list parsed: %u items (%d photos, %d videos), "
+                     "cnt %lld, pageNo %lld, result %lld",
+                     (unsigned)list.files.size(), photos, videos,
+                     (long long)list.count, (long long)list.page_no,
+                     (long long)list.result);
+            if (!list.files.empty()) {
+                const auto &first = list.files.front();
+                ESP_LOGI(TAG,
+                         "  first item: dir %lld num %lld id %lld time %lld",
+                         (long long)first.dir_num, (long long)first.num,
+                         (long long)first.id, (long long)first.time);
+            }
+        } else {
+            ESP_LOGW(TAG, "Media-list response had no mediaFiles array");
+        }
+    }
 
     // After the device-info reply, request the media list (as the app does).
     // cmdId 768 requires paging parameters, or the camera does not answer.

@@ -34,6 +34,7 @@ add_executable(host_tests
     test_artemis_login.cpp
     test_artemis_message.cpp
     test_artemis_reassembler.cpp
+    test_media_list.cpp
     test_pppp_session.cpp
     test_prelogin.cpp
     test_session_fsm.cpp
@@ -44,9 +45,11 @@ add_executable(host_tests
     ${ble_dir}/hex_payload.cpp
     ${link_dir}/artemis_aes128.cpp
     ${link_dir}/artemis_crypto.cpp
+    ${link_dir}/artemis_json.cpp
     ${link_dir}/artemis_login.cpp
     ${link_dir}/artemis_message.cpp
     ${link_dir}/artemis_reassembler.cpp
+    ${link_dir}/media_list.cpp
     ${link_dir}/camera_prelogin.cpp
     ${link_dir}/camera_udp_packets.cpp
     ${link_dir}/pppp_session.cpp
