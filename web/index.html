@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="./styles.css">
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
     <script type="module" src="./serial-console.js"></script>
+    <script src="./installer.js" defer></script>
   </head>
   <body>
     <main>
@@ -21,15 +22,39 @@
         <h2 id="install-heading">Install firmware</h2>
         <ol>
           <li>Connect your ESP32-S3 board to this computer with a USB data cable.</li>
-          <li>Select the board's serial port when your browser asks.</li>
+          <li>Choose a build version and variant below, then select the board's serial port when your browser asks.</li>
           <li>Confirm the installation in the browser dialog.</li>
         </ol>
-        <esp-web-install-button manifest="./manifest.json">
-          <button slot="activate" class="primary-button">Connect and install</button>
-          <span slot="unsupported">Use a desktop Chromium-based browser that supports Web Serial, such as Chrome or Edge.</span>
-          <span slot="not-allowed">Open this page over HTTPS and allow serial-port access in your browser.</span>
-        </esp-web-install-button>
-        <p class="note">This installs the current CI build. The firmware first surveys connectable BLE devices and logs their GATT profiles, then searches for <code>TC100_ED3B</code>. It sends the <code>BT_KEY_ON</code> Wi-Fi-enable command only to that camera if its GATT profile matches. Use it where those connections are authorized.</p>
+
+        <div class="version-picker">
+          <label for="version">Build version</label>
+          <select id="version"><option>Loading…</option></select>
+          <p id="build-info" class="note">&nbsp;</p>
+        </div>
+
+        <div class="build-choice">
+          <div class="build-option">
+            <h3>Development build</h3>
+            <p class="note">Verbose serial logs (INFO level). Use this to watch the camera protocol and read responses in the serial console below.</p>
+            <esp-web-install-button id="install-dev">
+              <button slot="activate" class="primary-button">Install dev build</button>
+              <span slot="unsupported">Use a desktop Chromium-based browser that supports Web Serial, such as Chrome or Edge.</span>
+              <span slot="not-allowed">Open this page over HTTPS and allow serial-port access in your browser.</span>
+            </esp-web-install-button>
+          </div>
+
+          <div class="build-option">
+            <h3>Release build</h3>
+            <p class="note">Size-optimized, warnings-only logging. Use this for normal operation.</p>
+            <esp-web-install-button id="install-release">
+              <button slot="activate" class="secondary-button">Install release build</button>
+              <span slot="unsupported">Use a desktop Chromium-based browser that supports Web Serial, such as Chrome or Edge.</span>
+              <span slot="not-allowed">Open this page over HTTPS and allow serial-port access in your browser.</span>
+            </esp-web-install-button>
+          </div>
+        </div>
+
+        <p class="note">Each build is the CI firmware for the ESP32-S3 at that commit. The firmware activates and talks to a camera only where those connections are authorized.</p>
       </section>
 
       <section aria-labelledby="console-heading">
@@ -45,7 +70,7 @@
 
       <section aria-labelledby="manual-heading">
         <h2 id="manual-heading">Manual download</h2>
-        <p>If you prefer to flash the firmware yourself, download the <a href="./trailcamhub-esp32s3.bin">merged ESP32-S3 image</a> and its <a href="./SHA256SUMS">SHA-256 checksum</a>.</p>
+        <p>Download the merged ESP32-S3 image for the selected version — <a id="dl-dev" href="#">development (verbose)</a> or <a id="dl-release" href="#">release</a> — and verify it against the <a id="dl-sha" href="#">SHA-256 checksums</a>. Flash it at offset <code>0x0</code>.</p>
       </section>
 
       <footer>

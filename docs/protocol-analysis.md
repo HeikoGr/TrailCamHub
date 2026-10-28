@@ -96,8 +96,9 @@ characteristic `0x0003`. Wake-up: write `BT_KEY_ON`
 ## 4. UDP/RUDP transport (PPPP/CS2, "Tutk")
 
 - Magic `0xF1`; types: `0xD0` DATA, `0xD1` ACK, `0xE0` ALIVE, `0xE1` ALIVE_ACK,
-  `0xF0` CLOSE, `0x41/0x42` LBCS discovery, `0xF9` PRE-LOGIN (unused by the genuine
-  client).
+  `0xF0` CLOSE, `0x41/0x42` LBCS discovery, `0xF9` PRE-LOGIN (the firmware's PRE-LOGIN
+  flow is used and works on hardware). A `0x42` without the `LBCS` marker is a data
+  fragment, not discovery.
 - ARTEMIS header (20 bytes): `"ARTEMIS\0"` + MsgType (LE; 2 = request, 3 = response)
   + AppSeq (LE) + PayloadLen (LE). It is followed by `Base64(AES-128-CBC(JSON))` and a
   terminating `\x00`.
@@ -113,14 +114,23 @@ characteristic `0x0003`. Wake-up: write `BT_KEY_ON`
 
 ## 5. Status
 
-All layers needed to talk to the camera are now understood:
+The full control path is implemented and **verified end-to-end on hardware** (TC100,
+firmware 2.3.0.3, model "Wi-Fi TrailCam"): discovery → PRE-LOGIN → login → token →
+device info (`512`) → **media list (`768`)**, including reassembly and decryption of the
+multi-fragment (~3 KB) responses.
 
-- **Transport** (RUDP/PPPP), **discovery**, and the **ARTEMIS framing** — documented.
-- **Command-channel encryption** — AES-128-CBC with the public key above.
+- **Transport** (RUDP/PPPP), **discovery**, **ARTEMIS framing**, **fragment reassembly**.
+- **Command-channel encryption** — AES-128-CBC (zero IV) with the public key above.
 - **Wi-Fi credentials** — read from the cleartext BLE response.
+- **Command set and schemas** — documented in [`udp-protocol.md`](udp-protocol.md) §5
+  (login, device info, media list with its required paging parameters).
 
-Implementation can proceed: command encryption/decryption, then login → token →
-file list (`768`) → download.
+Lessons that matter for a working session: send the first command only after the session
+settles (a heartbeat is acknowledged), request device info before the media list, and
+include the `itemCntPerPage`/`pageNo` parameters in `768` or the camera does not answer.
+
+Open next steps: a typed model of the media list, thumbnails (`772`) and media download,
+then local SD buffering and cloud upload.
 
 ---
 

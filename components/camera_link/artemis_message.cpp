@@ -47,10 +47,17 @@ bool parse(const Aes128 &cipher, const std::uint8_t *bytes, std::size_t size,
     if (payload_len == 0 || payload_len > size - kHeaderSize)
         return false;
 
-    const std::string body(reinterpret_cast<const char *>(bytes + kHeaderSize),
-                           payload_len);
+    // PayloadLen covers the Base64 string plus its NUL terminator and any
+    // trailing zero padding, so the Base64 ends at the first NUL.
+    const std::uint8_t *body = bytes + kHeaderSize;
+    std::size_t base64_len = 0;
+    while (base64_len < payload_len && body[base64_len] != 0)
+        ++base64_len;
+
     std::string json;
-    if (!decode(cipher, body, json))
+    if (!decode(cipher,
+                std::string(reinterpret_cast<const char *>(body), base64_len),
+                json))
         return false;
 
     out.msg_type = read_u32_le(bytes + 8);

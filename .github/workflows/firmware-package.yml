@@ -24,13 +24,21 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Build firmware and merged flash image
+      - name: Build dev and release merged flash images
         shell: bash
         run: |
           source "$IDF_PATH/export.sh"
           idf.py set-target esp32s3
+          # Dev image: default profile, verbose (INFO) logging.
           idf.py build
-          idf.py merge-bin -o trailcamhub-esp32s3-merged.bin
+          idf.py merge-bin -o trailcamhub-esp32s3-dev.bin
+          # Release image: size-optimized, warnings-only logging.
+          idf.py -B build-release \
+            -D IDF_TARGET=esp32s3 \
+            -D SDKCONFIG=build-release/sdkconfig \
+            -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.release" \
+            build
+          idf.py -B build-release merge-bin -o trailcamhub-esp32s3-release.bin
 
       - name: Assemble deployment package
         shell: bash
@@ -42,7 +50,8 @@ jobs:
           cp build/bootloader/bootloader.bin "$package_dir/bootloader.bin"
           cp build/partition_table/partition-table.bin "$package_dir/partition-table.bin"
           cp build/ota_data_initial.bin "$package_dir/ota_data_initial.bin"
-          cp build/trailcamhub-esp32s3-merged.bin "$package_dir/trailcamhub-esp32s3.bin"
+          cp build/trailcamhub-esp32s3-dev.bin "$package_dir/trailcamhub-esp32s3-dev.bin"
+          cp build-release/trailcamhub-esp32s3-release.bin "$package_dir/trailcamhub-esp32s3-release.bin"
           cp build/flasher_args.json "$package_dir/flasher_args.json"
           cp deployment/README.md "$package_dir/README.md"
           printf 'Git commit: %s\nESP-IDF: v5.3.6\nTarget: esp32s3\n' \
@@ -124,12 +133,17 @@ jobs:
 
   deploy-installer:
     name: Deploy web installer
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    # Publishes on every push to main, and on a manual "Run workflow" dispatch
+    # from any branch (Actions tab) so a branch build can be put on the public
+    # installer without merging. Pull requests never deploy.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       actions: read
-      contents: read
+      contents: write
       pages: write
       id-token: write
     environment:
@@ -151,17 +165,73 @@ jobs:
           name: trailcamhub-esp32s3
           path: artifact
 
-      - name: Assemble installer site
+      - name: Accumulate build and assemble site
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p site
           tar -xzf artifact/trailcamhub-esp32s3.tar.gz -C artifact
-          cp web/index.html web/styles.css web/serial-console.js site/
-          cp artifact/trailcamhub-esp32s3/trailcamhub-esp32s3.bin site/
-          sha256sum site/trailcamhub-esp32s3.bin | sed 's|site/||' > site/SHA256SUMS
-          version="0.0.0-${GITHUB_SHA:0:7}"
-          jq --arg version "$version" '.version = $version' web/manifest.json > site/manifest.json
+          pkg=artifact/trailcamhub-esp32s3
+          repo_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # Restore the persistent build store (an orphan branch) or start one.
+          if git ls-remote --exit-code --heads "$repo_url" installer-builds >/dev/null 2>&1; then
+            git clone --quiet --branch installer-builds --single-branch --depth 1 "$repo_url" store
+          else
+            mkdir store
+            git -C store init -q
+            git -C store checkout -q --orphan installer-builds
+            echo '{"builds":[]}' > store/versions.json
+          fi
+
+          # Add this build under a unique id.
+          id="$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA:0:7}"
+          dir="store/builds/$id"
+          mkdir -p "$dir"
+          cp "$pkg/trailcamhub-esp32s3-dev.bin" "$dir/"
+          cp "$pkg/trailcamhub-esp32s3-release.bin" "$dir/"
+          for variant in dev release; do
+            jq --arg v "$id" \
+              '.version=$v | .builds[0].parts[0].path=("./trailcamhub-esp32s3-'"$variant"'.bin")' \
+              "web/manifest-$variant.json" > "$dir/manifest-$variant.json"
+          done
+          (cd "$dir" && sha256sum trailcamhub-esp32s3-dev.bin \
+            trailcamhub-esp32s3-release.bin > SHA256SUMS)
+
+          # Prepend to the version index and keep the newest 20 builds.
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          message="$(git log -1 --pretty=%s "$GITHUB_SHA" 2>/dev/null || echo '')"
+          jq --arg id "$id" --arg date "$date_iso" --arg commit "${GITHUB_SHA:0:7}" \
+             --arg branch "${GITHUB_REF_NAME:-}" --arg message "$message" \
+             '.builds = ([{id:$id,date:$date,commit:$commit,branch:$branch,message:$message,
+                           dev:("builds/"+$id+"/manifest-dev.json"),
+                           release:("builds/"+$id+"/manifest-release.json"),
+                           devBin:("builds/"+$id+"/trailcamhub-esp32s3-dev.bin"),
+                           releaseBin:("builds/"+$id+"/trailcamhub-esp32s3-release.bin")}]
+                          + .builds) | .builds = (.builds | .[0:20])' \
+             store/versions.json > store/versions.json.tmp
+          mv store/versions.json.tmp store/versions.json
+          keep="$(jq -r '.builds[].id' store/versions.json)"
+          for d in store/builds/*/; do
+            bid="$(basename "$d")"
+            grep -qx "$bid" <<<"$keep" || rm -rf "$d"
+          done
+
+          # Commit and push the store.
+          git -C store config user.name "github-actions[bot]"
+          git -C store config user.email "github-actions[bot]@users.noreply.github.com"
+          git -C store remote set-url origin "$repo_url" 2>/dev/null \
+            || git -C store remote add origin "$repo_url"
+          git -C store add -A
+          git -C store commit -q -m "installer build $id" || echo "nothing to commit"
+          git -C store push -q origin installer-builds
+
+          # Assemble the published site: page assets + all stored builds.
+          mkdir -p site
+          cp web/index.html web/styles.css web/serial-console.js web/installer.js site/
+          cp store/versions.json site/
+          cp -r store/builds site/builds
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
