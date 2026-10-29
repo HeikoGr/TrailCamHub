@@ -1074,3 +1074,8 @@ void camera_protocol_request_stop(void)
 {
     s_stop_requested = true;
 }
+
+bool camera_protocol_work_completed(void)
+{
+    return s_work_done;
+}

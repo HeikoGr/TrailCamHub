@@ -215,3 +215,39 @@ TEST_CASE("user_stop in a session ends in idle after the session ended")
     CHECK(result.next == State::idle);
     CHECK(has(result, kDisconnectWifi));
 }
+
+TEST_CASE("a completed session ends in idle without auto start")
+{
+    Config config = kConfig;
+    config.auto_start = false;
+    Fsm fsm(config);
+    fsm.handle(Event::user_start);
+    fsm.handle(Event::credentials_received);
+    fsm.handle(Event::wifi_connected);
+    REQUIRE(fsm.state() == State::session);
+
+    const Result result = fsm.handle(Event::session_completed);
+    CHECK(result.next == State::idle);
+    CHECK(has(result, kDisconnectWifi));
+    CHECK_FALSE(has(result, kStartTimer));
+}
+
+TEST_CASE("a completed session backs off with auto start")
+{
+    Fsm fsm(kConfig);
+    reach_session(fsm);
+    CHECK(fsm.handle(Event::session_completed).next == State::backoff);
+    CHECK(std::string(to_string(Event::session_completed)) ==
+          "session completed");
+}
+
+TEST_CASE("a failed session backs off even without auto start")
+{
+    Config config = kConfig;
+    config.auto_start = false;
+    Fsm fsm(config);
+    fsm.handle(Event::user_start);
+    fsm.handle(Event::credentials_received);
+    fsm.handle(Event::wifi_connected);
+    CHECK(fsm.handle(Event::session_ended).next == State::backoff);
+}

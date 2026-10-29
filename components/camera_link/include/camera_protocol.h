@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 #include "esp_netif.h"
 
@@ -15,3 +17,9 @@ esp_err_t camera_protocol_run(const esp_ip4_addr_t *gateway);
  * returns within about one receive timeout (500 ms).
  */
 void camera_protocol_request_stop(void);
+
+/*
+ * True if the last camera_protocol_run() ended because all its work (media
+ * list, thumbnails, downloads) was done, not because of a stop or an error.
+ */
+bool camera_protocol_work_completed(void);

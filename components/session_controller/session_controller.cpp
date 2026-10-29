@@ -97,15 +97,20 @@ session_status_t to_status(session::State state)
     return SESSION_STATUS_IDLE;
 }
 
-void notify_status(const session::Result &result)
+void notify_status(const session::Result &result, session::Event event)
 {
     if (s_status_callback == NULL) {
         return;
     }
     session_status_info_t info = {};
     info.status = to_status(result.next);
+    const bool finished = result.next == session::State::idle &&
+                          event == session::Event::session_completed;
+    if (finished) {
+        info.status = SESSION_STATUS_FINISHED;
+    }
     if (result.next == session::State::wifi_join ||
-        result.next == session::State::session) {
+        result.next == session::State::session || finished) {
         strcpy(info.ssid, s_status_ssid);
     }
     if (result.next == session::State::backoff) {
@@ -192,6 +197,9 @@ void session_task(void *arg)
         diagnostics_log_memory("camera Wi-Fi connected");
         QueuedEvent event = make_event(session::Event::session_ended);
         event.error = camera_protocol_run(&gateway);
+        if (event.error == ESP_OK && camera_protocol_work_completed()) {
+            event.type = session::Event::session_completed;
+        }
         ESP_LOGI(TAG, "Camera session ended: %s", esp_err_to_name(event.error));
         post_event(event);
     }
@@ -298,7 +306,7 @@ void controller_task(void *arg)
                      (unsigned)(result.timer_ms / 1000));
         }
         execute(result);
-        notify_status(result);
+        notify_status(result, event.type);
         if (result.actions & session::kConnectWifi) {
             wipe(s_password, sizeof(s_password));
         }

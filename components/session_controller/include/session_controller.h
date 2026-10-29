@@ -16,6 +16,8 @@ typedef enum {
     SESSION_STATUS_CONNECTING,
     SESSION_STATUS_CONNECTED,
     SESSION_STATUS_RETRY_WAIT,
+    /* Idle after a session that did all its work. */
+    SESSION_STATUS_FINISHED,
 } session_status_t;
 
 typedef struct {

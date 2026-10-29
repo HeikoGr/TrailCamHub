@@ -83,9 +83,15 @@ Result Fsm::handle(Event event)
             stop_requested_ = true;
             return {state_, state_, kStopSession | kDisconnectWifi, 0, true};
         }
-        if (event == Event::session_ended) {
+        if (event == Event::session_ended ||
+            event == Event::session_completed) {
             if (stop_requested_) {
                 stop_requested_ = false;
+                return transition(State::idle, kDisconnectWifi);
+            }
+            // Without auto start the user asked for this one sync; wait for
+            // the next request instead of connecting to the camera again.
+            if (event == Event::session_completed && !config_.auto_start) {
                 return transition(State::idle, kDisconnectWifi);
             }
             return enter_backoff(kDisconnectWifi);
@@ -140,6 +146,8 @@ const char *to_string(Event event)
         return "Wi-Fi failed";
     case Event::session_ended:
         return "session ended";
+    case Event::session_completed:
+        return "session completed";
     case Event::timeout:
         return "timeout";
     case Event::user_start:

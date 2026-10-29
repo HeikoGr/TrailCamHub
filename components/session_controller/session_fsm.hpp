@@ -26,6 +26,8 @@ enum class Event : std::uint8_t {
     wifi_disconnected,
     wifi_failed,
     session_ended,
+    // The session ended after doing all its work (thumbnails, downloads).
+    session_completed,
     timeout,
     // The user asks to search for the camera now (for example a button press).
     user_start,
