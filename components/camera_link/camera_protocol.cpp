@@ -263,6 +263,7 @@ static camera::artemis::MediaCatalog s_catalog;
 static std::vector<camera::artemis::CatalogEntry> s_thumb_queue;
 static size_t s_thumb_index;
 static bool s_thumb_emitted;
+static bool s_work_done;
 static camera::artemis::BulkReassembler s_bulk;
 static uint8_t s_bulk_subtype;
 static uint16_t s_bulk_window[16];
@@ -397,6 +398,9 @@ static bool request_current_thumbnail()
                  (unsigned)s_catalog.count_with_flag(
                      camera::artemis::MediaCatalog::kThumbPresent),
                  (unsigned)s_catalog.size());
+        // Nothing left to fetch this cycle: let the session loop close the
+        // connection cleanly.
+        s_work_done = true;
         return false;
     }
     const camera::artemis::CatalogEntry &e = s_thumb_queue[s_thumb_index];
@@ -696,6 +700,7 @@ wait_for_artemis_packets(int socket_fd,
     s_thumb_queue.clear();
     s_thumb_index = 0;
     s_thumb_emitted = false;
+    s_work_done = false;
     s_bulk.reset();
     s_bulk_subtype = 0;
     s_bulk_window_count = 0;
@@ -703,6 +708,14 @@ wait_for_artemis_packets(int socket_fd,
     ESP_LOGI(TAG, "Starting ARTEMIS heartbeat loop");
 
     while (!stop_requested()) {
+        // All requested work is done: close the camera session cleanly
+        // (PPPP/CS2 CLOSE) and finish, rather than idling on heartbeats.
+        if (s_work_done) {
+            const camera::ControlRequest close(camera::PacketType::close);
+            send_udp_request(socket_fd, camera_address, "CLOSE", close);
+            ESP_LOGI(TAG, "Work complete; closed the camera session");
+            return ESP_OK;
+        }
         int64_t now_us = esp_timer_get_time();
         // Pause the session heartbeat during a bulk transfer: it would not be
         // acknowledged while the camera is streaming, and its retransmissions
