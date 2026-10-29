@@ -214,6 +214,42 @@ The installer does not configure the camera name or Wi-Fi-enable payload. It ins
 6. Connect an initial HTTPS cloud adapter and run end-to-end tests.
 7. Expand setup, diagnostics, camera support, and security features.
 
+## Roadmap: adoption and setup simplification
+
+The firmware flow is coming together; the larger open question is how hard this is
+for someone else to actually deploy. Flashing is already easy (the web installer),
+but the surrounding steps are still "advanced hobbyist". These are the planned
+improvements, roughly in order of how much they lower the barrier:
+
+- **Runtime configuration instead of recompiling (highest impact).** Provision the
+  device without a toolchain: a first-boot Wi-Fi access point ("TrailCamHub-Setup")
+  with a small config page (cellular APN, cloud/relay URL + secret, wake interval,
+  camera selection), or — even better — write the same config over Web Serial
+  directly from the existing web installer, so "flash + configure" is one browser
+  flow. One binary then serves every user.
+- **Camera compatibility is the first gate.** Only cameras from the supported
+  (ARTEMIS/PPPP) family work. Publish a **compatibility matrix** and add a
+  **"does my camera work?" diagnostic mode** as the very first step, so an
+  incompatible camera is surfaced up front rather than as a late frustration.
+- **Cloud relay as a copy-paste template.** Prefer a small relay (e.g. a Google
+  Apps Script web app: one HTTPS POST → Drive folder + Sheet row, plus a
+  command endpoint for the downlink) over putting Google OAuth/keys on the device.
+  Ship it as a copy-paste template with screenshots for users; keep `clasp` as the
+  developer path. Secrets live in Script Properties, never in the repo.
+- **Sane defaults and modes.** Ship a "thumbnails + metadata only" default (cheap,
+  winter-friendly), with full photo/video transfer opt-in, so a newcomer has to
+  decide almost nothing.
+- **Quickstart with a bill of materials and a wiring diagram.** A concrete parts
+  list and a wiring picture remove most of the hardware uncertainty.
+- **Downlink by polling on wake.** Since the device sleeps, a return channel works
+  as a command queue the device reads on each wake (e.g. "fetch full video X",
+  "change interval", OTA), rather than a persistent connection.
+
+Realistic target: with runtime config, a copy-paste cloud template, and a
+compatibility list, end-to-end setup moves from "1–3 h for a tinkerer" toward
+"~30 min for a technically-minded user", with the genuinely hard constraints
+(camera compatibility, cellular SIM) made visible up front.
+
 ## Contributing
 
 Contributions are welcome. During this early phase, verified information about board revisions, camera models, and reproducible connection steps is especially useful. Do not submit private media, credentials, or firmware images obtained without authorization.
