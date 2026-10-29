@@ -26,6 +26,9 @@
 #include "camera_protocol.h"
 #include "camera_udp_transport.h"
 #include "bulk_reassembler.hpp"
+#include "device_info.hpp"
+#include "media_catalog.hpp"
+#include "media_store.hpp"
 #include "camera_udp_packets.hpp"
 #include "mbedtls/base64.h"
 #include "media_list.hpp"
@@ -254,8 +257,12 @@ static bool s_logged_in;
 static int64_t s_token;
 static bool s_devinfo_requested;
 static bool s_media_requested;
-static bool s_thumbnail_requested;
 static uint32_t s_next_command_seq;
+static std::string s_camera_id;
+static camera::artemis::MediaCatalog s_catalog;
+static std::vector<camera::artemis::CatalogEntry> s_thumb_queue;
+static size_t s_thumb_index;
+static bool s_thumb_emitted;
 static camera::artemis::BulkReassembler s_bulk;
 static uint8_t s_bulk_subtype;
 static uint16_t s_bulk_window[16];
@@ -380,6 +387,26 @@ static bool send_artemis_command(uint32_t cmd_id, const char *extra_fields,
     return true;
 }
 
+// Requests the thumbnail (cmdId 772) for the current queue item, if any. The
+// reply streams back on the bulk channel; handle_bulk_frame() stores it and
+// advances the queue. Returns false when the queue is exhausted.
+static bool request_current_thumbnail()
+{
+    if (s_thumb_index >= s_thumb_queue.size()) {
+        ESP_LOGI(TAG, "Thumbnails complete: %u stored of %u catalog items",
+                 (unsigned)s_catalog.count_with_flag(
+                     camera::artemis::MediaCatalog::kThumbPresent),
+                 (unsigned)s_catalog.size());
+        return false;
+    }
+    const camera::artemis::CatalogEntry &e = s_thumb_queue[s_thumb_index];
+    const std::string extra =
+        ",\"thumbnailReqs\":[{\"fileType\":" + std::to_string(e.file_type) +
+        ",\"dirNum\":" + std::to_string(e.dir_num) +
+        ",\"mediaNum\":" + std::to_string(e.media_num) + "}]";
+    return send_artemis_command(772, extra.c_str(), "ARTEMIS GetThumbnail");
+}
+
 // Pushes a sequence into the small ACK window (deduplicated, most-recent kept).
 static void bulk_window_push(uint16_t seq)
 {
@@ -482,20 +509,48 @@ static void handle_bulk_frame(int socket_fd,
         MediaRecordHeader header;
         size_t jpeg_offset = 0;
         size_t jpeg_size = 0;
-        if (parse_media_record(s_bulk.payload(), s_bulk.payload_size(), header,
-                               jpeg_offset, jpeg_size)) {
+        const bool parsed =
+            parse_media_record(s_bulk.payload(), s_bulk.payload_size(), header,
+                               jpeg_offset, jpeg_size);
+        if (parsed) {
             ESP_LOGI(TAG,
                      "BULK subtype 0x%02x complete: %u record bytes, "
                      "%u JPEG bytes (dir %lld num %lld)",
                      (unsigned)subtype, (unsigned)s_bulk.received_bytes(),
                      (unsigned)jpeg_size, (long long)header.dir_num,
                      (long long)header.media_num);
-            emit_thumbnail_jpeg(s_bulk.payload() + jpeg_offset, jpeg_size,
-                                header);
         }
+
+        if (parsed && subtype == 0x04) {
+            // Thumbnail: store it on the SD card and record it in the catalog.
+            const uint8_t *jpeg = s_bulk.payload() + jpeg_offset;
+            if (camera::store::write_thumbnail(s_camera_id, header.dir_num,
+                                               header.media_num, jpeg,
+                                               jpeg_size)) {
+                s_catalog.set_flag(header.dir_num, header.media_num,
+                                   MediaCatalog::kThumbPresent);
+                camera::store::save_catalog(s_camera_id, s_catalog);
+            } else {
+                ESP_LOGW(TAG, "Could not store thumbnail dir %lld num %lld",
+                         (long long)header.dir_num,
+                         (long long)header.media_num);
+            }
+            // Emit the first thumbnail of the cycle over serial (for the web
+            // live view); the rest just go to the SD card to avoid flooding.
+            if (!s_thumb_emitted) {
+                emit_thumbnail_jpeg(jpeg, jpeg_size, header);
+                s_thumb_emitted = true;
+            }
+        }
+
         s_bulk.reset();
         s_bulk_window_count = 0;
         s_bulk_active = false;
+
+        if (subtype == 0x04) {
+            ++s_thumb_index;
+            request_current_thumbnail();
+        }
     }
 }
 
@@ -570,35 +625,46 @@ static void process_artemis_response(const SessionEvent &event)
                      (unsigned)list.files.size(), photos, videos,
                      (long long)list.count, (long long)list.page_no,
                      (long long)list.result);
-            if (!list.files.empty()) {
-                const auto &first = list.files.front();
-                ESP_LOGI(TAG,
-                         "  first item: dir %lld num %lld id %lld time %lld",
-                         (long long)first.dir_num, (long long)first.num,
-                         (long long)first.id, (long long)first.time);
-                // Recon: ask for the first item's thumbnail (cmdId 772) so we
-                // can observe the bulk data channel (D0/D1 subtype 0x04) on
-                // hardware. The reply streams back as binary records that the
-                // bulk transport (not yet implemented) will reassemble.
-                if (!s_thumbnail_requested) {
-                    s_thumbnail_requested = true;
-                    const std::string extra =
-                        ",\"thumbnailReqs\":[{\"fileType\":" +
-                        std::to_string(first.file_type) +
-                        ",\"dirNum\":" + std::to_string(first.dir_num) +
-                        ",\"mediaNum\":" + std::to_string(first.num) + "}]";
-                    send_artemis_command(772, extra.c_str(),
-                                         "ARTEMIS GetThumbnail");
-                }
-            }
+            // Merge into the on-SD catalog, persist it, then fetch the
+            // thumbnail of every item we do not have one for yet.
+            const size_t added = s_catalog.merge(list);
+            camera::store::save_catalog(s_camera_id, s_catalog);
+            s_thumb_queue = s_catalog.missing_thumbnails();
+            s_thumb_index = 0;
+            s_thumb_emitted = false;
+            ESP_LOGI(TAG,
+                     "Catalog %s: %u items (%u new), %u thumbnails to fetch",
+                     s_camera_id.c_str(), (unsigned)s_catalog.size(),
+                     (unsigned)added, (unsigned)s_thumb_queue.size());
+            request_current_thumbnail();
         } else {
             ESP_LOGW(TAG, "Media-list response had no mediaFiles array");
         }
     }
 
-    // After the device-info reply, request the media list (as the app does).
-    // cmdId 768 requires paging parameters, or the camera does not answer.
+    // Device info carries the camera identity (devId) and battery state. Use
+    // the id to load that camera's catalog from the SD card, then request the
+    // media list (as the app does; 768 needs paging parameters to answer).
     if (cmd_id == 512 && s_logged_in && !s_media_requested) {
+        DeviceInfo info;
+        if (parse_device_info(message.json, info)) {
+            s_camera_id = info.dev_id;
+            ESP_LOGI(TAG,
+                     "Camera '%s' model '%s' fw '%s' battery %lld%% "
+                     "SD free %lld MB",
+                     s_camera_id.c_str(), info.model_name.c_str(),
+                     info.fw_version.c_str(), (long long)info.bat_percent,
+                     (long long)info.sd_free_mb);
+        } else {
+            s_camera_id = "unknown";
+            ESP_LOGW(TAG, "Could not parse device info; using camera id '%s'",
+                     s_camera_id.c_str());
+        }
+        s_catalog.clear();
+        camera::store::load_catalog(s_camera_id, s_catalog);
+        ESP_LOGI(TAG, "Loaded catalog: %u known items",
+                 (unsigned)s_catalog.size());
+
         s_media_requested = true;
         send_artemis_command(768, ",\"itemCntPerPage\":45,\"pageNo\":0",
                              "ARTEMIS GetMediaList");
@@ -624,8 +690,12 @@ wait_for_artemis_packets(int socket_fd,
     s_token = 0;
     s_devinfo_requested = false;
     s_media_requested = false;
-    s_thumbnail_requested = false;
     s_next_command_seq = 2;
+    s_camera_id.clear();
+    s_catalog.clear();
+    s_thumb_queue.clear();
+    s_thumb_index = 0;
+    s_thumb_emitted = false;
     s_bulk.reset();
     s_bulk_subtype = 0;
     s_bulk_window_count = 0;
