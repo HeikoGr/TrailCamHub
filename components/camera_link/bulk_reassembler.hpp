@@ -27,6 +27,15 @@ class BulkReassembler
         invalid,     // bad signature or oversized record; caller should reset
     };
 
+    // Why the last feed() returned invalid (for diagnostics).
+    enum class InvalidReason {
+        none,
+        short_header_frame,  // first frame too short to hold the 20-byte header
+        bad_signature,       // first frame did not start with "ARTEMIS\0"
+        bad_length,  // header length field was zero or implausibly large
+    };
+    static const char *reason_name(InvalidReason reason);
+
     void reset();
 
     // Feeds one bulk frame's payload (the bytes after the 8-byte DRW header).
@@ -70,6 +79,10 @@ class BulkReassembler
     {
         return received_frames_;
     }
+    InvalidReason invalid_reason() const
+    {
+        return invalid_reason_;
+    }
 
     // Valid after feed() returns complete: the record payload (72-byte media
     // header + JPEG) and its size (== record_len()).
@@ -97,6 +110,7 @@ class BulkReassembler
     std::uint16_t base_seq_ = 0;  // sequence of the header-bearing frame
     bool have_header_ = false;
     bool invalid_ = false;
+    InvalidReason invalid_reason_ = InvalidReason::none;
 };
 
 }  // namespace camera::artemis

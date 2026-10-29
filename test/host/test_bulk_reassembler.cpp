@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "bulk_reassembler.hpp"
@@ -132,6 +133,35 @@ TEST_CASE("BulkReassembler rejects a frame without the ARTEMIS signature")
     auto bad = frame(64, 0x00);
     CHECK(r.feed(0, bad.data(), bad.size()) ==
           BulkReassembler::Status::invalid);
+    CHECK(r.invalid_reason() == BulkReassembler::InvalidReason::bad_signature);
+}
+
+TEST_CASE("BulkReassembler reports why a record was rejected")
+{
+    // Too short to hold the 20-byte header.
+    BulkReassembler a;
+    auto tiny = frame(8, 0x00);
+    CHECK(a.feed(0, tiny.data(), tiny.size()) ==
+          BulkReassembler::Status::invalid);
+    CHECK(a.invalid_reason() ==
+          BulkReassembler::InvalidReason::short_header_frame);
+
+    // Valid signature but an absurd length field.
+    BulkReassembler b;
+    std::vector<std::uint8_t> hdr(kFrame, 0);
+    const std::uint8_t sig[8] = {'A', 'R', 'T', 'E', 'M', 'I', 'S', 0};
+    std::copy(sig, sig + 8, hdr.begin());
+    hdr[16] = 0xff;
+    hdr[17] = 0xff;
+    hdr[18] = 0xff;
+    hdr[19] = 0xff;  // len = 0xffffffff
+    CHECK(b.feed(0, hdr.data(), hdr.size()) ==
+          BulkReassembler::Status::invalid);
+    CHECK(b.invalid_reason() == BulkReassembler::InvalidReason::bad_length);
+
+    CHECK(std::string(BulkReassembler::reason_name(
+              BulkReassembler::InvalidReason::bad_signature)) ==
+          "bad signature");
 }
 
 TEST_CASE("ArtemisBulkAckRequest builds a windowed ACK")

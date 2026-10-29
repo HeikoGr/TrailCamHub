@@ -20,6 +20,21 @@ std::uint32_t read_u32_le(const std::uint8_t *p)
 
 }  // namespace
 
+const char *BulkReassembler::reason_name(InvalidReason reason)
+{
+    switch (reason) {
+    case InvalidReason::none:
+        return "none";
+    case InvalidReason::short_header_frame:
+        return "short header frame";
+    case InvalidReason::bad_signature:
+        return "bad signature";
+    case InvalidReason::bad_length:
+        return "bad length";
+    }
+    return "unknown";
+}
+
 void BulkReassembler::reset()
 {
     buffer_.clear();
@@ -34,6 +49,7 @@ void BulkReassembler::reset()
     base_seq_ = 0;
     have_header_ = false;
     invalid_ = false;
+    invalid_reason_ = InvalidReason::none;
 }
 
 void BulkReassembler::place_frame(std::uint16_t seq,
@@ -71,9 +87,14 @@ BulkReassembler::Status BulkReassembler::feed(std::uint16_t seq,
     if (!have_header_) {
         // The first frame of a record carries the 20-byte ARTEMIS header and
         // sets the base sequence; anything else here is not a record start.
-        if (size < 20 ||
-            std::memcmp(payload, kSignature, sizeof(kSignature)) != 0) {
+        if (size < 20) {
             invalid_ = true;
+            invalid_reason_ = InvalidReason::short_header_frame;
+            return Status::invalid;
+        }
+        if (std::memcmp(payload, kSignature, sizeof(kSignature)) != 0) {
+            invalid_ = true;
+            invalid_reason_ = InvalidReason::bad_signature;
             return Status::invalid;
         }
         ver_ = read_u32_le(payload + 8);
@@ -82,6 +103,7 @@ BulkReassembler::Status BulkReassembler::feed(std::uint16_t seq,
         total_ = 20 + static_cast<std::size_t>(len_);
         if (total_ == 0 || total_ > kMaxRecordSize) {
             invalid_ = true;
+            invalid_reason_ = InvalidReason::bad_length;
             return Status::invalid;
         }
         total_frames_ = (total_ + kFramePayload - 1) / kFramePayload;

@@ -482,6 +482,7 @@ static void handle_bulk_frame(int socket_fd,
         s_bulk_active = true;
     }
 
+    const bool was_header = s_bulk.header_ready();
     const size_t before = s_bulk.received_frames();
     const BulkReassembler::Status status =
         s_bulk.feed(seq, payload, payload_len);
@@ -493,6 +494,16 @@ static void handle_bulk_frame(int socket_fd,
         send_udp_request(socket_fd, camera_address, "BULK ACK", ack);
     }
 
+    // Log the record boundary so successive records can be told apart.
+    if (!was_header && s_bulk.header_ready()) {
+        ESP_LOGI(TAG,
+                 "BULK record start: subtype 0x%02x base seq %u, ver %u typ %u "
+                 "len %u (%u frames)",
+                 (unsigned)subtype, (unsigned)seq, (unsigned)s_bulk.version(),
+                 (unsigned)s_bulk.type(), (unsigned)s_bulk.record_len(),
+                 (unsigned)s_bulk.total_frames());
+    }
+
     const size_t frames = s_bulk.received_frames();
     if (frames > before && (frames == 1 || frames % 8 == 0)) {
         ESP_LOGI(TAG, "BULK subtype 0x%02x seq %u (%u/%u frames, %u bytes)",
@@ -502,8 +513,17 @@ static void handle_bulk_frame(int socket_fd,
     }
 
     if (status == BulkReassembler::Status::invalid) {
-        ESP_LOGW(TAG, "BULK subtype 0x%02x: invalid record, resetting",
-                 (unsigned)subtype);
+        // Diagnostics: say why the frame was rejected and show its first
+        // bytes, so a non-header frame arriving as a record start (reordering,
+        // a straggler, or an unexpected framing) is visible in the log.
+        const size_t dump = payload_len < 24 ? payload_len : 24;
+        ESP_LOGW(TAG,
+                 "BULK subtype 0x%02x seq %u: invalid record (%s), "
+                 "%u payload bytes; first bytes:",
+                 (unsigned)subtype, (unsigned)seq,
+                 BulkReassembler::reason_name(s_bulk.invalid_reason()),
+                 (unsigned)payload_len);
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload, dump, ESP_LOG_WARN);
         s_bulk.reset();
         s_bulk_window_count = 0;
         s_bulk_active = false;
