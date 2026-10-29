@@ -1,8 +1,9 @@
 /*
  * This module starts the log copy on the SD card, initializes diagnostics,
- * persistent storage, the SD card and the network stack, then hands over to
- * the session controller, which runs the camera workflow. The BLE stack is
- * started by the camera BLE module when it is needed.
+ * persistent storage, the SD card and the network stack, starts the web UI
+ * where enabled, then hands over to the session controller, which runs the
+ * camera workflow. The BLE stack is started by the camera BLE module when it
+ * is needed.
  */
 
 #include "esp_err.h"
@@ -12,12 +13,54 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#include "camera_protocol.h"
 #include "sd_card.h"
 #include "sd_log.h"
 #include "session_controller.h"
 #include "system_diagnostics.h"
+#include "web_ui.h"
 
 static const char *TAG = "trailcamhub";
+
+#if CONFIG_WEB_UI_ENABLE
+#define HAS_STATUS_OUTPUT 1
+static bool s_web_ready;
+
+// Passes the workflow status to the web UI.
+static void on_session_status(const session_status_info_t *info)
+{
+    if (s_web_ready) {
+        const char *phase = "idle";
+        switch (info->status) {
+        case SESSION_STATUS_IDLE:
+            break;
+        case SESSION_STATUS_SEARCHING:
+            phase = "searching";
+            break;
+        case SESSION_STATUS_CONNECTING:
+            phase = "connecting";
+            break;
+        case SESSION_STATUS_CONNECTED:
+            phase = "connected";
+            break;
+        case SESSION_STATUS_RETRY_WAIT:
+            phase = "retry_wait";
+            break;
+        case SESSION_STATUS_FINISHED:
+            phase = "finished";
+            break;
+        }
+        web_ui_set_status(phase, info->ssid, info->retry_delay_ms);
+    }
+}
+
+static void on_media_progress(uint32_t done, uint32_t stored, uint32_t total)
+{
+    if (s_web_ready) {
+        web_ui_set_media_progress(done, stored, total);
+    }
+}
+#endif
 
 extern "C" void app_main(void)
 {
@@ -57,6 +100,21 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     ESP_ERROR_CHECK(session_controller_init());
+#if CONFIG_WEB_UI_ENABLE
+    // Needs the Wi-Fi driver, which session_controller_init() started.
+    static const web_ui_callbacks_t web_callbacks = {
+        .on_search = session_controller_request_search,
+        .on_stop = session_controller_request_stop,
+    };
+    s_web_ready = web_ui_start(&web_callbacks) == ESP_OK;
+    if (!s_web_ready) {
+        ESP_LOGW(TAG, "Continuing without web UI");
+    }
+#endif
+#if HAS_STATUS_OUTPUT
+    session_controller_set_status_callback(on_session_status);
+    camera_protocol_set_progress_callback(on_media_progress);
+#endif
     error = session_controller_start();
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "Could not start the session controller: %s",

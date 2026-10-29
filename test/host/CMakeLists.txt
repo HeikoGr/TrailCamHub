@@ -23,6 +23,7 @@ set(repo_root ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 set(ble_dir ${repo_root}/components/camera_ble)
 set(link_dir ${repo_root}/components/camera_link)
 set(session_dir ${repo_root}/components/session_controller)
+set(web_dir ${repo_root}/components/web_ui)
 
 add_executable(host_tests
     test_main.cpp
@@ -46,6 +47,7 @@ add_executable(host_tests
     test_prelogin.cpp
     test_session_fsm.cpp
     test_udp_packets.cpp
+    test_web_paths.cpp
     ${ble_dir}/ble_advertising.cpp
     ${ble_dir}/ble_wifi_response.cpp
     ${ble_dir}/gatt_profile.cpp
@@ -68,9 +70,10 @@ add_executable(host_tests
     ${link_dir}/camera_prelogin.cpp
     ${link_dir}/camera_udp_packets.cpp
     ${link_dir}/pppp_session.cpp
-    ${session_dir}/session_fsm.cpp)
+    ${session_dir}/session_fsm.cpp
+    ${web_dir}/web_paths.cpp)
 target_include_directories(host_tests PRIVATE ${ble_dir} ${link_dir}
-                                              ${session_dir})
+                                              ${session_dir} ${web_dir})
 target_include_directories(host_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_options(host_tests PRIVATE -Wall -Wextra -Werror)
 

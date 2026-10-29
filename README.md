@@ -60,6 +60,16 @@ The firmware configuration (`sdkconfig.defaults`, `sdkconfig.defaults.esp32s3`, 
 
 A camera and a cellular subscription are required for testing. Camera credentials and SIM PINs must not be committed to the repository.
 
+### Web UI
+
+With `CONFIG_WEB_UI_ENABLE` (**TrailCamHub PoC → Web UI** in `menuconfig`, off by default; not on the ESP32-P4) the `web_ui` component opens a WPA2 access point `TrailCamHub-XXXX` next to the camera station (AP+STA) and serves a page at `http://10.42.0.1`. Its password (10 characters from an alphabet without characters that look alike on a small display, such as `g`, `q` and `9`) is generated at the first boot and stored in NVS, and `web_ui_password()` returns it for a display; a stored password from an earlier firmware that contains such characters is replaced once; a fixed password can be set in `menuconfig`. The page shows the workflow status and the download progress, has buttons to search for the camera and to stop, browses the SD card (photos and videos with their thumbnails), shows images, videos, audio and text files, offers every file for download and deletion (two taps: *Delete*, then *Delete?* within three seconds) and follows the current log file of `sd_log` live. Directories, the log file being written and unfinished files (`.part`, `.tmp`) cannot be deleted, because removing a file that is open for writing corrupts the FAT volume. A deleted photo or video stays marked as downloaded in the catalog, so it is not downloaded again.
+
+- The DHCP server offers no router, so phones keep their mobile data for the internet and reach the device on the local subnet.
+- While the camera Wi-Fi is joined, the access point has to use the camera's channel. If it was on another channel, clients are disconnected when the station joins and usually reconnect within a few seconds. The component therefore stores the channel of the last camera in NVS and opens the access point there at the next boot, so with the same camera the switch happens only once. The channel scan while joining interrupts the access point for a moment but does not disconnect clients; a continuous BLE scan, however, leaves the access point little air time while the camera is searched.
+- The HTTP server runs in one task, so the page does not update while a large file is being downloaded.
+- The page consists of `index.html`, `style.css` (all layout) and `app.js` in `components/web_ui/www/`, embedded in the firmware. The path parameters are decoded and checked by `web_paths.cpp` (host-tested), which rejects `..` segments.
+- It needs about 40 KB of internal RAM; boards without PSRAM may run short of memory for BLE and Wi-Fi.
+
 ### Log on the SD card
 
 `sd_log` (enabled by default wherever the SD card is enabled, **TrailCamHub PoC → Log on the SD card**) copies every log line to `/sdcard/logs/log-NNNNN.txt`, so that a field test can be read afterwards without a serial console. The lines are collected from the first statement of `app_main` (the boot messages are kept in a 64 KB PSRAM buffer until the card is mounted; 8 KB of internal RAM without PSRAM) and written by a low-priority task about once per second; each write is synced to the card, so pulling the device loses at most the last second. A new file is started at every boot and when a file reaches 4 MB; the 50 newest files are kept. Lines that do not fit into the buffer, for example while the card is busy, are counted and noted in the file. Lines longer than 255 characters are cut.
@@ -109,6 +119,7 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/camera_wifi` | Wi-Fi station for the camera access point; runs a session callback after each connection |
 | `components/camera_link` | Camera session over UDP: discovery, PRE_LOGIN, PPPP/ARTEMIS packets, ALIVE, heartbeats; media list, thumbnails, photo and video download |
 | `components/sd_storage` | microSD card mount |
+| `components/web_ui` | Access point and web UI: status, search/stop, file browser and download, live log |
 | `components/sd_log` | Copy of the log output in text files on the SD card |
 | `components/diagnostics` | Reset reason, core dump status, and heap statistics |
 | `components/session_controller` | Session state machine and the task that drives the camera workflow |
