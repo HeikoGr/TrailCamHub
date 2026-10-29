@@ -160,7 +160,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Download firmware package
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: trailcamhub-esp32s3
           path: artifact
