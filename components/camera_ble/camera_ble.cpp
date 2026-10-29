@@ -19,6 +19,9 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "sdkconfig.h"
+#if CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE
+#include "esp_hosted.h"
+#endif
 
 #include "ble_advertising.hpp"
 #include "camera_ble.h"
@@ -540,8 +543,55 @@ static void host_task(void *arg)
     nimble_port_freertos_deinit();
 }
 
+#if CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE
+// The Bluetooth controller runs on the ESP32-C6 co-processor and is switched
+// on and off over ESP-Hosted. Co-processor firmware older than ESP-Hosted
+// 2.5.2 keeps the controller enabled and does not answer these requests;
+// each attempt then blocks until the RPC times out. After the first failure
+// the controller is assumed to be always on and is no longer switched.
+static bool s_remote_controller_switchable = true;
+
+static void start_remote_controller(void)
+{
+    if (!s_remote_controller_switchable) {
+        return;
+    }
+    esp_err_t error = esp_hosted_bt_controller_init();
+    if (error == ESP_OK) {
+        error = esp_hosted_bt_controller_enable();
+    }
+    if (error != ESP_OK) {
+        s_remote_controller_switchable = false;
+        ESP_LOGW(TAG,
+                 "Could not enable the co-processor BLE controller (%s); "
+                 "assuming its firmware keeps BLE enabled. Update the "
+                 "ESP-Hosted firmware on the co-processor to 2.5.2 or later.",
+                 esp_err_to_name(error));
+    }
+}
+
+static void stop_remote_controller(void)
+{
+    if (!s_remote_controller_switchable) {
+        return;
+    }
+    esp_err_t error = esp_hosted_bt_controller_disable();
+    if (error == ESP_OK) {
+        // Keep the controller memory so BLE can be started again.
+        error = esp_hosted_bt_controller_deinit(false);
+    }
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Could not disable the co-processor BLE controller: %s",
+                 esp_err_to_name(error));
+    }
+}
+#endif
+
 static esp_err_t start_stack(void)
 {
+#if CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE
+    start_remote_controller();
+#endif
     esp_err_t error = nimble_port_init();
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "Could not initialize NimBLE: %s",
@@ -573,6 +623,9 @@ static void stop_stack(void)
         ESP_LOGE(TAG, "Could not release the BLE stack: %s",
                  esp_err_to_name(error));
     }
+#if CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE
+    stop_remote_controller();
+#endif
     BleLock lock;
     s_stack_running = false;
     s_synced = false;

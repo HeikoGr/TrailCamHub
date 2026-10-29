@@ -71,26 +71,35 @@ config SD_CARD_ENABLE
     default y
     help
         Mount the FAT file system of the microSD card at /sdcard using the
-        SDMMC peripheral in 1-bit mode. The card is never formatted
-        automatically.
+        SDMMC peripheral. The card is never formatted automatically. On the
+        ESP32-S3 board the card is used in 1-bit mode on the GPIOs below; on
+        the ESP32-P4-NANO it uses SDMMC slot 0 in 4-bit mode on its fixed
+        IO MUX pins (CLK GPIO43, CMD GPIO44, D0-D3 GPIO39-42), powered by
+        on-chip LDO channel 4.
 
 config SD_CARD_CLK_GPIO
     int "CLK GPIO"
-    depends on SD_CARD_ENABLE
+    depends on SD_CARD_ENABLE && !IDF_TARGET_ESP32P4
     range 0 48
     default 5
 
 config SD_CARD_CMD_GPIO
     int "CMD GPIO"
-    depends on SD_CARD_ENABLE
+    depends on SD_CARD_ENABLE && !IDF_TARGET_ESP32P4
     range 0 48
     default 4
 
 config SD_CARD_D0_GPIO
     int "D0 GPIO"
-    depends on SD_CARD_ENABLE
+    depends on SD_CARD_ENABLE && !IDF_TARGET_ESP32P4
     range 0 48
     default 6
+
+config SD_CARD_LDO_CHANNEL
+    int "On-chip LDO channel powering the card"
+    depends on SD_CARD_ENABLE && IDF_TARGET_ESP32P4
+    range 1 4
+    default 4
 
 endmenu
 

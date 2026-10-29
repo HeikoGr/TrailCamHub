@@ -1,6 +1,6 @@
-# TrailCamHub ESP32-S3 Deployment Package
+# TrailCamHub Deployment Package
 
-This archive contains the firmware images for the ESP32-S3 BLE/Wi-Fi proof of concept, built for the Waveshare ESP32-S3-A7670E-4G board (16 MB flash, 8 MB PSRAM).
+This archive contains the firmware images for the BLE/Wi-Fi proof of concept. `BUILD_INFO.txt` names the board: `esp32s3` packages are built for the Waveshare ESP32-S3-A7670E-4G board (16 MB flash, 8 MB PSRAM), `esp32p4` packages for the Waveshare ESP32-P4-NANO (see [ESP32-P4-NANO](#esp32-p4-nano) below). The sections up to that one describe the ESP32-S3 package.
 
 ## Browser installer
 
@@ -35,3 +35,13 @@ After the camera returns Wi-Fi credentials over BLE, the firmware joins the came
 At boot the firmware logs the reset reason, the available PSRAM, and memory statistics, and mounts a FAT-formatted microSD card at `/sdcard` if one is inserted. The card is never formatted by the firmware. The partition table provides two 4 MB OTA slots and a core dump partition; OTA updates themselves are not implemented yet. The image requires the board's 16 MB flash and octal PSRAM; on hardware without PSRAM it stops during boot.
 
 The firmware logs status over its serial console. Use an authorized camera and review its status before leaving the device unattended.
+
+## ESP32-P4-NANO
+
+The `trailcamhub-esp32p4` package contains the same firmware built for the Waveshare ESP32-P4-NANO. It is not offered by the browser installer. Flash the merged image over the board's USB-to-UART port:
+
+```sh
+esptool --chip esp32p4 --port PORT --baud 460800 write-flash 0x0 trailcamhub-esp32p4-dev.bin
+```
+
+On this board Wi-Fi and BLE are provided by the on-board ESP32-C6 through ESP-Hosted; the C6 must run the ESP-Hosted firmware of the same release. The microSD card is used in 4-bit mode. Media uploads are not implemented yet. The image runs on ESP32-P4 chip revision v1.x only; the bootloader rejects other revisions (the boot log shows `chip revision`).

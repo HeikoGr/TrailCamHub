@@ -12,6 +12,9 @@
 #include "esp_vfs_fat.h"
 #include "sdkconfig.h"
 #include "sdmmc_cmd.h"
+#if CONFIG_IDF_TARGET_ESP32P4
+#include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#endif
 
 #include "sd_card.h"
 
@@ -35,15 +38,35 @@ esp_err_t sd_card_mount(void)
 
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+#if CONFIG_IDF_TARGET_ESP32P4
+    // Slot 0 uses fixed IO MUX pins; slot 1 belongs to the ESP32-C6
+    // co-processor. Both share the SDMMC host, which must therefore never
+    // be deinitialized while ESP-Hosted is running.
+    host.slot = SDMMC_HOST_SLOT_0;
+    slot.width = 4;
+    sd_pwr_ctrl_ldo_config_t ldo_config = {};
+    ldo_config.ldo_chan_id = CONFIG_SD_CARD_LDO_CHANNEL;
+    sd_pwr_ctrl_handle_t power = NULL;
+    esp_err_t power_error = sd_pwr_ctrl_new_on_chip_ldo(&ldo_config, &power);
+    if (power_error != ESP_OK) {
+        ESP_LOGE(TAG, "Could not enable the SD card power supply (LDO %d): %s",
+                 CONFIG_SD_CARD_LDO_CHANNEL, esp_err_to_name(power_error));
+        return power_error;
+    }
+    host.pwr_ctrl_handle = power;
+    ESP_LOGI(TAG, "Mounting SD card (4-bit SDMMC slot 0, LDO %d)",
+             CONFIG_SD_CARD_LDO_CHANNEL);
+#else
     slot.width = 1;
     slot.clk = (gpio_num_t)CONFIG_SD_CARD_CLK_GPIO;
     slot.cmd = (gpio_num_t)CONFIG_SD_CARD_CMD_GPIO;
     slot.d0 = (gpio_num_t)CONFIG_SD_CARD_D0_GPIO;
-    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
-
     ESP_LOGI(TAG, "Mounting SD card (1-bit SDMMC, CLK=%d CMD=%d D0=%d)",
              CONFIG_SD_CARD_CLK_GPIO, CONFIG_SD_CARD_CMD_GPIO,
              CONFIG_SD_CARD_D0_GPIO);
+#endif
+    slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+
     esp_err_t error = esp_vfs_fat_sdmmc_mount(SD_CARD_MOUNT_POINT, &host, &slot,
                                               &mount_config, &s_card);
     if (error == ESP_FAIL) {

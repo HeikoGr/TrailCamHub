@@ -1,6 +1,7 @@
 # Settings shared by all supported boards. Board-specific settings are in
 # sdkconfig.defaults.<target>, which ESP-IDF applies on top of this file:
 #   esp32s3: Waveshare ESP32-S3-A7670E-4G
+#   esp32p4: Waveshare ESP32-P4-NANO
 
 # Flash and partitions
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

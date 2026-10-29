@@ -28,6 +28,10 @@ jobs:
           - board: esp32s3
             target: esp32s3
             board_defaults: ""
+          # Waveshare ESP32-P4-NANO (artifact only)
+          - board: esp32p4
+            target: esp32p4
+            board_defaults: ""
     env:
       IDF_PATH: /opt/esp/idf
       BOARD: ${{ matrix.board }}
