@@ -89,8 +89,18 @@ config SD_CARD_ENABLE
     default y
     help
         Mount the FAT file system of the microSD card at /sdcard using the
-        SDMMC peripheral in 1-bit mode. The card is never formatted
-        automatically.
+        SDMMC peripheral in 1-bit mode or, in SPI mode, an SPI bus. The card
+        is never formatted automatically. In SPI mode CLK is the SPI clock,
+        CMD the MOSI and D0 the MISO line.
+
+config SD_CARD_SPI_MODE
+    bool "Use the card in SPI mode" if SOC_SDMMC_HOST_SUPPORTED
+    depends on SD_CARD_ENABLE
+    default y if !SOC_SDMMC_HOST_SUPPORTED
+    help
+        Talk to the card over SPI2 instead of SDMMC. Required on chips
+        without an SDMMC host (ESP32-C5). The bus may be shared with other
+        devices such as a display.
 
 config SD_CARD_CLK_GPIO
     int "CLK GPIO"
@@ -109,6 +119,12 @@ config SD_CARD_D0_GPIO
     depends on SD_CARD_ENABLE
     range 0 48
     default 6
+
+config SD_CARD_CS_GPIO
+    int "CS GPIO"
+    depends on SD_CARD_SPI_MODE
+    range 0 48
+    default 23
 
 endmenu
 
