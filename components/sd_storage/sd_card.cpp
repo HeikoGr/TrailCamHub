@@ -15,7 +15,8 @@
 
 #include "sd_card.h"
 
-#define SD_CARD_MAX_OPEN_FILES 4
+// The log, a download, the catalog and the web server may hold files at once.
+#define SD_CARD_MAX_OPEN_FILES 8
 #define SD_CARD_ALLOCATION_UNIT_SIZE (16 * 1024)
 
 static const char *TAG = "trailcamhub_sd";
