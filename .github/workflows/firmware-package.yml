@@ -234,7 +234,7 @@ jobs:
           cp -r store/builds site/builds
 
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
