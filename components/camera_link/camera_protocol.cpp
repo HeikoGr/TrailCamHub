@@ -774,7 +774,15 @@ wait_for_artemis_packets(int socket_fd,
                          "ARTEMIS heartbeat command %u, index %u awaiting ACK",
                          heartbeat.command_count(), heartbeat_index);
             } else if (!s_session.transport_failed()) {
-                ESP_LOGW(TAG, "No free DATA slot for the heartbeat");
+                if (s_session.outstanding_count() <
+                    camera::pppp::Session::kMaxOutstanding) {
+                    // A send error, not a full window: try again after the
+                    // heartbeat interval instead of in a tight loop.
+                    last_heartbeat_us = now_us;
+                    ESP_LOGW(TAG, "Could not send the heartbeat; retrying");
+                } else {
+                    ESP_LOGW(TAG, "No free DATA slot for the heartbeat");
+                }
             }
         }
         size_t retransmitted = s_bulk_active ? 0 : s_session.poll(now_us);
