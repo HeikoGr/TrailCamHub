@@ -1,8 +1,8 @@
 /*
  * This module initializes diagnostics, persistent storage, the SD card and
- * the network stack, then hands over to the session controller, which runs
- * the camera workflow. The BLE stack is started by the camera BLE module when
- * it is needed.
+ * the network stack (with the Ethernet uplink on boards that have one), then
+ * hands over to the session controller, which runs the camera workflow. The
+ * BLE stack is started by the camera BLE module when it is needed.
  */
 
 #include "esp_err.h"
@@ -12,6 +12,7 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#include "ethernet_uplink.h"
 #include "sd_card.h"
 #include "session_controller.h"
 #include "system_diagnostics.h"
@@ -43,6 +44,14 @@ extern "C" void app_main(void)
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+#if CONFIG_ETH_UPLINK_ENABLE
+    // Uploads are not implemented yet, so a missing uplink is not fatal.
+    error = ethernet_uplink_start();
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Continuing without Ethernet uplink");
+    }
+#endif
 
     ESP_ERROR_CHECK(session_controller_init());
     error = session_controller_start();

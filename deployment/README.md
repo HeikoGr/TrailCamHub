@@ -44,4 +44,4 @@ The `trailcamhub-esp32p4` package contains the same firmware built for the Waves
 esptool --chip esp32p4 --port PORT --baud 460800 write-flash 0x0 trailcamhub-esp32p4-dev.bin
 ```
 
-On this board Wi-Fi and BLE are provided by the on-board ESP32-C6 through ESP-Hosted; the C6 must run the ESP-Hosted firmware of the same release. The microSD card is used in 4-bit mode. Media uploads are not implemented yet. The image runs on ESP32-P4 chip revision v1.x only; the bootloader rejects other revisions (the boot log shows `chip revision`).
+On this board Wi-Fi and BLE are provided by the on-board ESP32-C6 through ESP-Hosted; the C6 must run the ESP-Hosted firmware of the same release. At boot the firmware also starts the wired Ethernet port and requests an address over DHCP; Ethernet remains the default route while the camera access point is joined. The microSD card is used in 4-bit mode. Media uploads are not implemented yet. The image runs on ESP32-P4 chip revision v1.x only; the bootloader rejects other revisions (the boot log shows `chip revision`).

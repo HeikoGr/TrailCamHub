@@ -26,3 +26,8 @@ CONFIG_BT_CONTROLLER_DISABLED=y
 # CONFIG_BT_NIMBLE_TRANSPORT_UART is not set
 CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE=y
 CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
+
+# Ethernet is the uplink; the camera Wi-Fi is only a local link. Use the
+# DNS servers of the default interface so the camera's DHCP server cannot
+# replace the Ethernet DNS servers.
+CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF=y

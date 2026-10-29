@@ -103,4 +103,42 @@ config SD_CARD_LDO_CHANNEL
 
 endmenu
 
+menu "Ethernet uplink"
+    depends on SOC_EMAC_SUPPORTED
+
+config ETH_UPLINK_ENABLE
+    bool "Use wired Ethernet as the uplink"
+    default y
+    help
+        Start the on-chip Ethernet MAC with the IP101 PHY at boot and obtain
+        an address over DHCP. The Ethernet interface stays the default
+        route while the camera Wi-Fi is joined. The GPIO defaults match the
+        Waveshare ESP32-P4-NANO (RMII reference clock input on GPIO50).
+
+config ETH_UPLINK_MDC_GPIO
+    int "SMI MDC GPIO"
+    depends on ETH_UPLINK_ENABLE
+    range 0 54
+    default 31
+
+config ETH_UPLINK_MDIO_GPIO
+    int "SMI MDIO GPIO"
+    depends on ETH_UPLINK_ENABLE
+    range 0 54
+    default 52
+
+config ETH_UPLINK_PHY_RST_GPIO
+    int "PHY reset GPIO (-1: none)"
+    depends on ETH_UPLINK_ENABLE
+    range -1 54
+    default 51
+
+config ETH_UPLINK_PHY_ADDR
+    int "PHY address"
+    depends on ETH_UPLINK_ENABLE
+    range 0 31
+    default 1
+
+endmenu
+
 endmenu
