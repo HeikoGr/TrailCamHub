@@ -29,6 +29,15 @@ config CAMERA_UDP_LOG_PACKET_HEX
         "trailcamhub_udp" tag to DEBUG to see them. Disable this option to
         drop the hex dump from the build entirely.
 
+config CAMERA_THUMBNAIL_SERIAL_PREVIEW
+    bool "Print the first thumbnail of a session as Base64"
+    default y
+    help
+        Log the first thumbnail of each session as Base64 lines between
+        "THUMB" markers, which the browser installer's live view shows.
+        About 33 KB of log per session; boards with a web UI can show the
+        thumbnails from the SD card instead.
+
 config DIAG_MEMORY_LOG_INTERVAL_S
     int "Memory log interval (seconds)"
     range 0 3600

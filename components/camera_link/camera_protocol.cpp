@@ -60,6 +60,11 @@ static const bool kDownloadPhotos = true;
 #else
 static const bool kDownloadPhotos = false;
 #endif
+#ifdef CONFIG_CAMERA_THUMBNAIL_SERIAL_PREVIEW
+#define CAMERA_THUMBNAIL_SERIAL_PREVIEW 1
+#else
+#define CAMERA_THUMBNAIL_SERIAL_PREVIEW 0
+#endif
 // Videos are not offered by the file download (cmdId 1285): the camera
 // acknowledges the request but sends nothing, so only photos are fetched.
 static const bool kDownloadVideos = false;
@@ -839,7 +844,7 @@ static void handle_bulk_frame(int socket_fd,
             }
             // Emit the first thumbnail of the cycle over serial (for the web
             // live view); the rest just go to the SD card to avoid flooding.
-            if (!s_thumb_emitted) {
+            if (CAMERA_THUMBNAIL_SERIAL_PREVIEW && !s_thumb_emitted) {
                 emit_thumbnail_jpeg(jpeg, jpeg_size, header);
                 s_thumb_emitted = true;
             }
