@@ -22,6 +22,7 @@
 #include "dongle_ui.h"
 #include "screen_renderer.hpp"
 #include "st7735_display.h"
+#include "status_led.h"
 #include "status_screen.hpp"
 
 // The button of the dongle is the BOOT button; it pulls to ground.
@@ -39,6 +40,26 @@ static const char *TAG = "trailcamhub_ui";
 
 namespace
 {
+
+// Shows the tone on the RGB LED, or keeps it off at brightness 0.
+void show_led(ui::Tone tone)
+{
+    const uint8_t brightness = CONFIG_DONGLE_LED_BRIGHTNESS;
+    switch (tone) {
+    case ui::Tone::busy:
+        status_led_set(255, 160, 0, brightness);
+        return;
+    case ui::Tone::ok:
+        status_led_set(0, 255, 40, brightness);
+        return;
+    case ui::Tone::warning:
+        status_led_set(255, 60, 0, brightness);
+        return;
+    case ui::Tone::neutral:
+        break;
+    }
+    status_led_set(255, 255, 255, brightness);
+}
 
 SemaphoreHandle_t s_lock;
 TaskHandle_t s_task;
@@ -106,6 +127,9 @@ void ui_task(void *arg)
     while (true) {
         const ui::Screen screen = current_screen();
         if (!has_shown || !ui::same_content(screen, shown)) {
+            if (!has_shown || screen.tone != shown.tone) {
+                show_led(screen.tone);
+            }
             render(screen);
             if (st7735_present(s_frame) == ESP_OK) {
                 shown = screen;
@@ -179,6 +203,12 @@ esp_err_t dongle_ui_start(const dongle_ui_callbacks_t *callbacks)
     esp_err_t error = gpio_config(&button);
     if (error != ESP_OK) {
         return error;
+    }
+    // The LED is bright until it gets data, so switch it off first.
+    error = status_led_init();
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Could not set up the RGB LED: %s",
+                 esp_err_to_name(error));
     }
     error = st7735_init();
     if (error != ESP_OK) {

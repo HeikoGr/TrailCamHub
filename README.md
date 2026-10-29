@@ -72,7 +72,7 @@ The **LilyGO T-Dongle-S3** is a USB stick with an ESP32-S3 (16 MB flash, no PSRA
 - **SD card** in 1-bit mode on CLK GPIO12, CMD GPIO16, D0 GPIO14, with the [log](#log-on-the-sd-card) on it.
 - **Photo download** on (**Media download → Download photos to the SD card**, described with the other `menuconfig` options below); the UDP receive mailbox is raised to 16 packets so frames are not lost while the card is busy. The Base64 thumbnail is left out of the log (`CONFIG_CAMERA_THUMBNAIL_SERIAL_PREVIEW` off).
 
-The display pins (MOSI GPIO3, SCLK GPIO5, CS GPIO4, DC GPIO2, RST GPIO1, backlight GPIO38, active low) are fixed in `components/dongle_ui/st7735_display.cpp`. Still to verify on hardware: display orientation and colours, and BLE plus Wi-Fi operation without PSRAM.
+The display pins (MOSI GPIO3, SCLK GPIO5, CS GPIO4, DC GPIO2, RST GPIO1, backlight GPIO38, active low) are fixed in `components/dongle_ui/st7735_display.cpp`. The APA102 RGB LED (clock GPIO39, data GPIO40) shows a random colour at full brightness until it receives data, so `dongle_ui` switches it off when it starts (about a second after power-up). With `CONFIG_DONGLE_LED_BRIGHTNESS` (1-31, default 0 = off) it shows the phase in the colour of the display title instead, at that global brightness. Still to verify on hardware: display orientation and colours, and BLE plus Wi-Fi operation without PSRAM.
 
 ### Web UI
 

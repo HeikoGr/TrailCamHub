@@ -3,7 +3,7 @@ set(srcs)
 if(CONFIG_BOARD_TDONGLE)
     list(APPEND srcs "dongle_ui.cpp" "st7735_display.cpp" "font5x7.cpp"
                      "status_screen.cpp" "button_detector.cpp"
-                     "screen_renderer.cpp")
+                     "screen_renderer.cpp" "status_led.cpp")
 endif()
 
 idf_component_register(SRCS ${srcs}
