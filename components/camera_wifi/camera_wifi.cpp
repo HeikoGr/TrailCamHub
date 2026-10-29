@@ -133,10 +133,6 @@ esp_err_t camera_wifi_init(const camera_wifi_callbacks_t *callbacks)
         return ESP_ERR_INVALID_ARG;
     }
     s_callbacks = *callbacks;
-    ESP_RETURN_ON_ERROR(esp_netif_init(), TAG,
-                        "Could not initialize network interface");
-    ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG,
-                        "Could not create default event loop");
     if (esp_netif_create_default_wifi_sta() == NULL) {
         ESP_LOGE(TAG, "Could not create Wi-Fi station interface");
         return ESP_FAIL;
