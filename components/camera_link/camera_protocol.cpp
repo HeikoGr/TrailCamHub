@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -27,6 +28,8 @@
 #include "camera_udp_transport.h"
 #include "bulk_reassembler.hpp"
 #include "bulk_stream.hpp"
+#include "playback_record.hpp"
+#include "playback_stream.hpp"
 #include "device_info.hpp"
 #include "media_catalog.hpp"
 #include "media_store.hpp"
@@ -60,14 +63,37 @@ static const bool kDownloadPhotos = true;
 #else
 static const bool kDownloadPhotos = false;
 #endif
+// Videos are not offered by the file download (cmdId 1285): the camera
+// acknowledges the request but sends nothing. They are fetched by playing
+// them back (cmdId 769), which streams their H.264 and AAC frames.
+#ifdef CONFIG_CAMERA_DOWNLOAD_VIDEOS
+static const bool kDownloadVideos = true;
+#else
+static const bool kDownloadVideos = false;
+#endif
+// A video stream has ended when no frame arrived for this long.
+#define CAMERA_VIDEO_END_IDLE_US (3 * 1000 * 1000)
+// Before the next video, wait until frames of the stopped stream stop coming.
+#define CAMERA_VIDEO_DRAIN_US (1000 * 1000)
+// Records of another session number before the stream's number is adopted
+// (in case the camera ignores the requested one).
+#define CAMERA_VIDEO_ADOPT_SESSION_RECORDS 30
+// The app buffers up to 2 MB per video frame.
+#define CAMERA_VIDEO_MAX_RECORD (3u * 1024u * 1024u)
+#define CAMERA_VIDEO_LOG_FRAMES 100
+// fileType of videos in the app's playback request. Our camera's media list
+// reports videos as 2 and refuses playback with the app's value 1 (startPbRet
+// -3), so the list's own value is tried first and this one as the fallback.
+#define CAMERA_VIDEO_APP_FILE_TYPE 1
 #ifdef CONFIG_CAMERA_THUMBNAIL_SERIAL_PREVIEW
 #define CAMERA_THUMBNAIL_SERIAL_PREVIEW 1
 #else
 #define CAMERA_THUMBNAIL_SERIAL_PREVIEW 0
 #endif
-// Videos are not offered by the file download (cmdId 1285): the camera
-// acknowledges the request but sends nothing, so only photos are fetched.
-static const bool kDownloadVideos = false;
+#ifndef CONFIG_CAMERA_VIDEO_HEARTBEAT_INTERVAL_MS
+#define CONFIG_CAMERA_VIDEO_HEARTBEAT_INTERVAL_MS                              \
+    CAMERA_RUDP_HEARTBEAT_INTERVAL_MS
+#endif
 #ifndef CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S
 #define CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S 20
 #endif
@@ -316,6 +342,30 @@ static camera::artemis::BulkStream
 static camera::store::MediaFileWriter s_media_file;
 static camera_protocol_progress_cb_t s_progress_callback;
 
+// Video playback download (cmdId 769), on top of s_download_active. The H.264
+// stream goes to s_media_file, the AAC stream to s_audio_file.
+static bool s_video_active;
+static uint32_t s_video_session_no;
+static int64_t s_video_file_type;
+static bool s_video_retried;
+static int64_t s_video_total_frames;
+static int64_t s_video_last_data_us;
+static int64_t s_video_drain_until_us;
+static bool s_video_write_failed;
+static uint32_t s_video_ack_failures;
+static uint32_t s_video_heartbeats;
+static int64_t s_video_write_us;
+static int64_t s_video_write_max_us;
+static bool s_video_complete_logged;
+static uint32_t s_video_frames;
+static uint32_t s_video_audio_frames;
+static uint32_t s_video_markers;
+static uint32_t s_video_foreign_records;
+static uint32_t s_video_other_records;
+static camera::artemis::PlaybackStream
+    s_playback(CAMERA_DOWNLOAD_REORDER_FRAMES, CAMERA_VIDEO_MAX_RECORD);
+static camera::store::MediaFileWriter s_audio_file;
+
 static bool from_camera(const struct sockaddr_in *source,
                         const struct sockaddr_in *camera_address)
 {
@@ -517,15 +567,81 @@ static void report_download_progress()
     }
 }
 
-// Requests the full file (cmdId 1285) for the current download queue item and
-// opens its file on the SD card. The file streams back on the bulk channel;
-// handle_download_frame() writes it. When the queue is exhausted, the session
-// is closed.
+// Asks the camera to play back the current video (cmdId 769).
+static void send_playback_request(const camera::artemis::CatalogEntry &e)
+{
+    const std::string extra =
+        ",\"fileType\":" + std::to_string(s_video_file_type) +
+        ",\"dirNum\":" + std::to_string(e.dir_num) +
+        ",\"mediaNum\":" + std::to_string(e.media_num) +
+        ",\"sessionNo\":" + std::to_string(s_video_session_no);
+    send_artemis_command(769, extra.c_str(), "ARTEMIS StartPlayRecord");
+}
+
+// Starts the playback download of a video: opens its two files and asks the
+// camera to play it back. Returns false if the SD card cannot be written.
+static bool start_video_download(const camera::artemis::CatalogEntry &e)
+{
+    if (!s_media_file.open(s_camera_id, e.dir_num, e.media_num, "h264") ||
+        !s_audio_file.open(s_camera_id, e.dir_num, e.media_num, "aac")) {
+        s_media_file.abort();
+        s_audio_file.abort();
+        return false;
+    }
+    s_video_session_no = 1 + esp_random() % 0xfffe;
+    s_video_file_type = e.file_type;
+    s_video_retried = false;
+    s_video_total_frames = 0;
+    s_video_last_data_us = 0;
+    s_video_write_failed = false;
+    s_video_ack_failures = 0;
+    s_video_heartbeats = 0;
+    s_video_write_us = 0;
+    s_video_write_max_us = 0;
+    s_video_complete_logged = false;
+    s_video_frames = 0;
+    s_video_audio_frames = 0;
+    s_video_markers = 0;
+    s_video_foreign_records = 0;
+    s_video_other_records = 0;
+    s_playback.reset();
+    s_bulk_window_count = 0;
+    s_video_active = true;
+    ESP_LOGI(TAG,
+             "Downloading video dir %lld num %lld (%u of %u) by playback, "
+             "session %u",
+             (long long)e.dir_num, (long long)e.media_num,
+             (unsigned)(s_download_index + 1),
+             (unsigned)s_download_queue.size(), (unsigned)s_video_session_no);
+    send_playback_request(e);
+    s_download_active = true;
+    s_download_started_us = esp_timer_get_time();
+    s_download_progress_us = s_download_started_us;
+    return true;
+}
+
+// Requests the current download queue item: a photo as a file (cmdId 1285),
+// which streams back on the bulk channel for handle_download_frame(), or a
+// video by playback (start_video_download()). When the queue is exhausted,
+// the session is closed.
 static void request_current_download()
 {
+    // Frames of a stopped video stream may still be on their way.
+    if (s_video_drain_until_us > esp_timer_get_time()) {
+        return;
+    }
+    s_video_drain_until_us = 0;
     while (s_download_index < s_download_queue.size()) {
         const camera::artemis::CatalogEntry &e =
             s_download_queue[s_download_index];
+        if (e.file_type != 0) {
+            if (start_video_download(e)) {
+                return;
+            }
+            ESP_LOGW(TAG, "Cannot write to the SD card; stopping downloads");
+            s_download_index = s_download_queue.size();
+            break;
+        }
         if (!s_media_file.open(s_camera_id, e.dir_num, e.media_num)) {
             ESP_LOGW(TAG, "Cannot write to the SD card; stopping downloads");
             s_download_index = s_download_queue.size();
@@ -582,11 +698,64 @@ static void finish_current_download(bool stored, bool stop_all)
 {
     using camera::artemis::MediaCatalog;
     const camera::artemis::CatalogEntry &e = s_download_queue[s_download_index];
+    const bool was_video = s_video_active;
+    uint64_t video_bytes = 0;
+    if (s_video_active) {
+        video_bytes = s_media_file.size() + s_audio_file.size();
+        // Stop the stream, also after it ended, as the app does.
+        send_artemis_command(770, "", "ARTEMIS StopPlayRecord");
+        ESP_LOGI(TAG,
+                 "Video dir %lld num %lld: %u video frames (camera: %lld), %u "
+                 "audio frames, %u markers dropped, %u records of another "
+                 "session, %u other records, %llu + %llu bytes",
+                 (long long)e.dir_num, (long long)e.media_num,
+                 (unsigned)s_video_frames, (long long)s_video_total_frames,
+                 (unsigned)s_video_audio_frames, (unsigned)s_video_markers,
+                 (unsigned)s_video_foreign_records,
+                 (unsigned)s_video_other_records,
+                 (unsigned long long)s_media_file.size(),
+                 (unsigned long long)s_audio_file.size());
+        // Where the time went: gaps and repeats mean lost packets, long SD
+        // writes block the receive loop, low internal heap makes sends fail.
+        const camera::artemis::FrameReorder::Stats &frames =
+            s_playback.reorder_stats();
+        ESP_LOGI(TAG,
+                 "Video transfer: %u frames out of order, %u repeated by the "
+                 "camera, %u beyond the window, %u ACK send failures, SD "
+                 "writes %lld ms (longest %lld ms), internal heap %u B free "
+                 "(min %u B), %u heartbeats (%u.%u video frames each)",
+                 (unsigned)frames.buffered, (unsigned)frames.duplicates,
+                 (unsigned)frames.ahead, (unsigned)s_video_ack_failures,
+                 (long long)(s_video_write_us / 1000),
+                 (long long)(s_video_write_max_us / 1000),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)s_video_heartbeats,
+                 (unsigned)(s_video_heartbeats > 0
+                                ? s_video_frames / s_video_heartbeats
+                                : 0),
+                 (unsigned)(s_video_heartbeats > 0
+                                ? s_video_frames * 10 / s_video_heartbeats % 10
+                                : 0));
+        stored = stored && s_video_frames > 0;
+        if (stored && s_audio_file.size() > 0) {
+            if (!s_audio_file.finish(e.media_time)) {
+                stored = false;
+            }
+        } else {
+            s_audio_file.abort();
+        }
+        s_video_active = false;
+        s_playback.reset();
+        s_video_drain_until_us = esp_timer_get_time() + CAMERA_VIDEO_DRAIN_US;
+    }
     if (stored && s_media_file.finish(e.media_time)) {
         const int64_t elapsed_ms =
             (esp_timer_get_time() - s_download_started_us) / 1000;
-        const uint64_t bytes = s_download_stream.delivered_bytes() -
-                               s_download_stream.prefix().size();
+        const uint64_t bytes = was_video
+                                   ? video_bytes
+                                   : s_download_stream.delivered_bytes() -
+                                         s_download_stream.prefix().size();
         ESP_LOGI(TAG, "Stored %s (%llu bytes in %lld ms, %llu KB/s)",
                  s_media_file.path().c_str(), (unsigned long long)bytes,
                  (long long)elapsed_ms,
@@ -706,12 +875,147 @@ static void handle_download_frame(int socket_fd,
 // Aborts the current download if no data arrived for the stall timeout.
 static void check_download_stall(int64_t now_us)
 {
+    if (s_video_drain_until_us != 0 && !s_download_active &&
+        now_us >= s_video_drain_until_us) {
+        request_current_download();
+        return;
+    }
+    if (s_video_active && s_video_last_data_us != 0) {
+        // The camera does not mark the end of the stream; it stops sending.
+        if (now_us - s_video_last_data_us > CAMERA_VIDEO_END_IDLE_US) {
+            ESP_LOGI(TAG, "Video stream ended");
+            finish_current_download(true, false);
+        }
+        return;
+    }
     if (s_download_active &&
         now_us - s_download_progress_us >
             CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S * 1000000LL) {
         ESP_LOGW(TAG, "No download data for %d s; skipping the file",
                  CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S);
         finish_current_download(false, false);
+    }
+}
+
+// Writes to a file and adds the time to the transfer statistics.
+static bool timed_write(camera::store::MediaFileWriter &file,
+                        const uint8_t *data, size_t size)
+{
+    const int64_t started_us = esp_timer_get_time();
+    const bool ok = file.write(data, size);
+    const int64_t took_us = esp_timer_get_time() - started_us;
+    s_video_write_us += took_us;
+    if (took_us > s_video_write_max_us) {
+        s_video_write_max_us = took_us;
+    }
+    return ok;
+}
+
+// Writes one record of the playback stream: decrypts it and appends video
+// frames to the H.264 file and audio frames to the AAC file. Returns false if
+// the SD card failed or the stream is unusable.
+static bool write_playback_record(uint32_t version, uint8_t *payload,
+                                  size_t size)
+{
+    using namespace camera::artemis;
+    PlaybackFrame frame;
+    if (version != kPlaybackRecordVersion ||
+        !parse_playback_record(payload, size, frame) ||
+        frame.kind == PlaybackKind::other) {
+        s_video_other_records++;
+        return true;
+    }
+    if (frame.session_no != s_video_session_no) {
+        // A camera that ignores the requested number uses its own; adopt it
+        // once it is clearly the stream's, not a leftover of an old one.
+        if (++s_video_foreign_records < CAMERA_VIDEO_ADOPT_SESSION_RECORDS ||
+            s_video_frames + s_video_audio_frames > 0) {
+            return true;
+        }
+        ESP_LOGW(TAG, "Camera uses session %u instead of %u; following it",
+                 (unsigned)frame.session_no, (unsigned)s_video_session_no);
+        s_video_session_no = frame.session_no;
+    }
+    decrypt_playback_data(s_command_cipher, frame.data, frame.size);
+    if (frame.kind == PlaybackKind::audio) {
+        s_video_audio_frames++;
+        if (!timed_write(s_audio_file, frame.data, frame.size)) {
+            s_video_write_failed = true;
+            return false;
+        }
+        return true;
+    }
+    if (is_marker_frame(frame.data, frame.size)) {
+        s_video_markers++;
+        return true;
+    }
+    if (s_video_frames == 0) {
+        ESP_LOGI(TAG, "First video frame: %ux%u, pts %u ms, %u bytes",
+                 (unsigned)frame.width, (unsigned)frame.height,
+                 (unsigned)frame.pts_ms, (unsigned)frame.size);
+        ESP_LOG_BUFFER_HEX_LEVEL(
+            TAG, frame.data, frame.size < 16 ? frame.size : 16, ESP_LOG_INFO);
+    }
+    const size_t skip = annexb_start_offset(frame.data, frame.size);
+    if (!timed_write(s_media_file, frame.data + skip, frame.size - skip)) {
+        s_video_write_failed = true;
+        return false;
+    }
+    if (++s_video_frames % CAMERA_VIDEO_LOG_FRAMES == 0) {
+        ESP_LOGI(TAG, "Video: %u of %lld frames, %llu KB",
+                 (unsigned)s_video_frames, (long long)s_video_total_frames,
+                 (unsigned long long)(s_media_file.size() / 1024));
+    }
+    return true;
+}
+
+// Handles one frame of the playback stream (bulk subtype 0x02).
+static void handle_playback_frame(int socket_fd,
+                                  const struct sockaddr_in *camera_address,
+                                  uint16_t seq, const uint8_t *payload,
+                                  size_t payload_len)
+{
+    using camera::artemis::PlaybackStream;
+    bool ack = false;
+    const PlaybackStream::Status status = s_playback.feed(
+        seq, payload, payload_len,
+        [](uint32_t version, uint32_t, uint8_t *data, size_t size) {
+            return write_playback_record(version, data, size);
+        },
+        ack);
+    if (ack) {
+        bulk_window_push(seq);
+        camera::ArtemisBulkAckRequest window_ack;
+        if (window_ack.build(0x02, s_bulk_window, s_bulk_window_count)) {
+            if (send_udp_request(socket_fd, camera_address, "BULK ACK",
+                                 window_ack) != ESP_OK) {
+                s_video_ack_failures++;
+            }
+        }
+        s_video_last_data_us = esp_timer_get_time();
+        s_download_progress_us = s_video_last_data_us;
+    }
+    if (status == PlaybackStream::Status::invalid) {
+        if (s_video_write_failed) {
+            finish_current_download(false, true);
+            return;
+        }
+        ESP_LOGW(TAG, "Video stream out of sync after %llu frames",
+                 (unsigned long long)s_playback.frames());
+        const size_t dump = payload_len < 24 ? payload_len : 24;
+        ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload, dump, ESP_LOG_WARN);
+        // Keep what was written; the rest of the video is missing.
+        finish_current_download(s_video_frames > 0, false);
+        return;
+    }
+    // Audio frames may still follow the last video frame, so the stream ends
+    // only when the camera stops sending (see check_download_stall()).
+    if (s_video_total_frames > 0 &&
+        static_cast<int64_t>(s_video_frames) == s_video_total_frames &&
+        !s_video_complete_logged) {
+        s_video_complete_logged = true;
+        ESP_LOGI(TAG, "All %lld video frames received",
+                 (long long)s_video_total_frames);
     }
 }
 
@@ -731,6 +1035,28 @@ static void handle_bulk_frame(int socket_fd,
     const bool is_record_start =
         payload_len >= 20 && memcmp(payload, kSig, sizeof(kSig)) == 0;
 
+    // During a video download the stream is on subtype 0x02. The app ignores
+    // the other subtypes then (a preview stream on 0x03), and so do we.
+    if (s_video_active) {
+        if (subtype == 0x02) {
+            handle_playback_frame(socket_fd, camera_address, seq, payload,
+                                  payload_len);
+        }
+        return;
+    }
+    // Leftovers of a stopped video stream.
+    if (subtype == 0x02) {
+        if (s_video_drain_until_us != 0) {
+            s_video_drain_until_us =
+                esp_timer_get_time() + CAMERA_VIDEO_DRAIN_US;
+        }
+        camera::ArtemisBulkAckRequest stray_ack;
+        if (stray_ack.build(subtype, &seq, 1)) {
+            send_udp_request(socket_fd, camera_address, "BULK ACK (stray)",
+                             stray_ack);
+        }
+        return;
+    }
     // Thumbnails keep subtype 0x04; any other subtype during a download is
     // the requested file (0x03 for photos).
     if (s_download_active && subtype != 0x04) {
@@ -913,6 +1239,40 @@ static void process_artemis_response(const SessionEvent &event)
     ESP_LOGI(TAG, "ARTEMIS response cmdId %lld: %s", (long long)cmd_id,
              message.json.c_str());
 
+    // The camera answers the playback request with the video's size, then
+    // streams it. When it refuses the app's fileType, try the media list's.
+    if (cmd_id == 769 && s_video_active) {
+        int64_t start = 0;
+        int64_t result = 0;
+        json_find_int(message.json, "startPbRet", start);
+        json_find_int(message.json, "result", result);
+        if (start == 0 && result == 0) {
+            json_find_int(message.json, "totalFrame", s_video_total_frames);
+            return;
+        }
+        const camera::artemis::CatalogEntry &e =
+            s_download_queue[s_download_index];
+        const int64_t other = s_video_file_type == e.file_type
+                                  ? CAMERA_VIDEO_APP_FILE_TYPE
+                                  : e.file_type;
+        if (!s_video_retried && other != s_video_file_type) {
+            ESP_LOGW(TAG,
+                     "Camera refused playback with fileType %lld (startPbRet "
+                     "%lld, result %lld); trying %lld",
+                     (long long)s_video_file_type, (long long)start,
+                     (long long)result, (long long)other);
+            s_video_retried = true;
+            s_video_file_type = other;
+            s_download_progress_us = esp_timer_get_time();
+            send_playback_request(e);
+            return;
+        }
+        ESP_LOGW(TAG, "Camera refused playback (startPbRet %lld, result %lld)",
+                 (long long)start, (long long)result);
+        finish_current_download(false, false);
+        return;
+    }
+
     // The camera acknowledges a download request before streaming the file;
     // a non-zero result means it will not send it.
     if (cmd_id == 1285 && s_download_active) {
@@ -1001,8 +1361,7 @@ static esp_err_t run_artemis_session(int socket_fd,
     uint16_t heartbeat_index = 0;
     bool heartbeat_pending = false;
     int64_t last_heartbeat_us = 0;
-    const int64_t heartbeat_interval_us =
-        CAMERA_RUDP_HEARTBEAT_INTERVAL_MS * 1000LL;
+    int64_t heartbeat_interval_us = CAMERA_RUDP_HEARTBEAT_INTERVAL_MS * 1000LL;
     s_response.reset();
     s_logged_in = false;
     s_token = 0;
@@ -1023,6 +1382,9 @@ static esp_err_t run_artemis_session(int socket_fd,
     s_download_index = 0;
     s_download_active = false;
     s_download_stream.reset();
+    s_video_active = false;
+    s_video_drain_until_us = 0;
+    s_playback.reset();
     ESP_LOGI(TAG, "Starting ARTEMIS heartbeat loop");
 
     while (!stop_requested()) {
@@ -1036,6 +1398,12 @@ static esp_err_t run_artemis_session(int socket_fd,
         }
         int64_t now_us = esp_timer_get_time();
         check_download_stall(now_us);
+        // A video download may use its own interval: the camera streamed about
+        // two video frames per heartbeat, as if it were held back by them.
+        heartbeat_interval_us =
+            (s_video_active ? CONFIG_CAMERA_VIDEO_HEARTBEAT_INTERVAL_MS
+                            : CAMERA_RUDP_HEARTBEAT_INTERVAL_MS) *
+            1000LL;
         // Pause the session heartbeat during a bulk transfer: it would not be
         // acknowledged while the camera is streaming, and its retransmissions
         // only compete with our frame ACKs on the uplink.
@@ -1047,6 +1415,9 @@ static esp_err_t run_artemis_session(int socket_fd,
                                     "ARTEMIS heartbeat", &heartbeat_index)) {
                 heartbeat_pending = true;
                 last_heartbeat_us = now_us;
+                if (s_video_active) {
+                    s_video_heartbeats++;
+                }
                 ESP_LOGI(TAG,
                          "ARTEMIS heartbeat command %u, index %u awaiting ACK",
                          heartbeat.command_count(), heartbeat_index);
@@ -1157,7 +1528,9 @@ wait_for_artemis_packets(int socket_fd,
         ESP_LOGW(TAG, "Session ended during a download; partial file removed");
         s_media_file.abort();
     }
+    s_audio_file.abort();
     s_download_active = false;
+    s_video_active = false;
     return error;
 }
 

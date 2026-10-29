@@ -122,12 +122,40 @@ config CAMERA_DOWNLOAD_PHOTOS
         After the thumbnails, download every photo of the camera's media
         list that is not on the SD card yet to /sdcard/<camera>/media/.
         The file is streamed to the card while it arrives, so it is never
-        held in RAM. Videos are not downloaded: the camera sends them only
-        as a playback stream (cmdId 769), not as a file.
+        held in RAM. Videos are a separate option: the camera sends them
+        only as a playback stream (cmdId 769), not as a file.
+
+config CAMERA_DOWNLOAD_VIDEOS
+    bool "Download videos (raw H.264 and AAC streams)"
+    depends on SPIRAM
+    default n
+    help
+        After the photos, play back every video of the media list that is
+        not on the SD card yet (cmdId 769) and store its streams as
+        /sdcard/<camera>/media/<dir>_<num>.h264 (H.264 Annex-B, playable
+        with VLC) and .aac (AAC with ADTS headers). One MP4 can be made
+        without re-encoding:
+          ffmpeg -i 100_2.h264 -i 100_2.aac -c copy 100_2.mp4
+        The camera streams the frames one by one; a video frame of up to
+        3 MB is held in PSRAM. Not yet verified on hardware.
+
+config CAMERA_VIDEO_HEARTBEAT_INTERVAL_MS
+    int "Heartbeat interval during a video download (ms)"
+    depends on CAMERA_DOWNLOAD_VIDEOS
+    range 100 3000
+    default 1500
+    help
+        On the camera tried so far a video streamed at about two video frames
+        per heartbeat, 19 times slower than playback, as if the camera were
+        held back by the heartbeats. A shorter interval tests this: if the
+        transfer gets faster in proportion, the camera paces the stream with
+        them. The summary line of each video logs the heartbeats sent and the
+        frames per heartbeat. Outside a video download the heartbeat is sent
+        every 1.5 s.
 
 config CAMERA_DOWNLOAD_STALL_TIMEOUT_S
     int "Abort a download after this many seconds without data"
-    depends on CAMERA_DOWNLOAD_PHOTOS
+    depends on CAMERA_DOWNLOAD_PHOTOS || CAMERA_DOWNLOAD_VIDEOS
     range 5 300
     default 20
     help

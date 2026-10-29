@@ -73,10 +73,10 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
                      std::int64_t num, const std::uint8_t *jpeg,
                      std::size_t size, std::int64_t media_time);
 
-// Writes one downloaded media file. The bytes go to
-// <camera-id>/media/<dir>_<num>.part; finish() renames it to the final name,
-// whose extension is detected from the content, so an interrupted download
-// never looks like a complete file.
+// Writes one downloaded media file. The bytes go to a ".part" file in
+// <camera-id>/media/; finish() renames it to <dir>_<num>.<extension>, so an
+// interrupted download never looks like a complete file. Without a given
+// extension it is detected from the content.
 class MediaFileWriter
 {
   public:
@@ -88,7 +88,8 @@ class MediaFileWriter
         abort();
     }
 
-    bool open(const std::string &camera_id, std::int64_t dir, std::int64_t num);
+    bool open(const std::string &camera_id, std::int64_t dir, std::int64_t num,
+              const char *extension = nullptr);
     bool write(const std::uint8_t *data, std::size_t size);
     // Closes the file, gives it its final name and dates it by `media_time`
     // (Unix seconds; <= 0 keeps the default). Returns false on error, in
@@ -101,6 +102,11 @@ class MediaFileWriter
     {
         return file_ != nullptr;
     }
+    // Bytes written so far.
+    std::uint64_t size() const
+    {
+        return size_;
+    }
     // Final path, valid after a successful finish().
     const std::string &path() const
     {
@@ -108,11 +114,15 @@ class MediaFileWriter
     }
 
   private:
+    std::string part_path() const;
+
     std::FILE *file_ = nullptr;
-    std::string base_;  // path without extension
+    std::string base_;       // path without extension
+    std::string extension_;  // empty: detect from the content
     std::string path_;
     std::uint8_t head_[12] = {};
     std::size_t head_size_ = 0;
+    std::uint64_t size_ = 0;
 };
 
 }  // namespace camera::store

@@ -37,6 +37,15 @@ class FrameReorder
         failed,     // the deliver function returned false
     };
 
+    // What feed() saw since start(); all but `buffered` mean lost or repeated
+    // packets, which slow a transfer down.
+    struct Stats {
+        std::uint32_t buffered = 0;    // ahead of the next frame (a gap)
+        std::uint32_t duplicates = 0;  // already passed on: sent again
+        std::uint32_t ahead = 0;       // beyond the window, not kept
+        std::uint32_t outside = 0;     // beyond the frame limit
+    };
+
     explicit FrameReorder(std::size_t window_frames);
 
     void reset();
@@ -57,6 +66,10 @@ class FrameReorder
     {
         return started_;
     }
+    const Stats &stats() const
+    {
+        return stats_;
+    }
     // Index of the frame expected next (= number of frames passed on).
     std::uint64_t next_frame() const
     {
@@ -73,6 +86,7 @@ class FrameReorder
     std::vector<std::uint16_t> sizes_;  // 0: slot empty
     std::uint64_t next_frame_ = 0;
     std::uint64_t limit_ = 0;
+    Stats stats_;
     std::uint16_t base_seq_ = 0;
     bool started_ = false;
 };

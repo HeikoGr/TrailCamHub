@@ -13,6 +13,7 @@ FrameReorder::FrameReorder(std::size_t window_frames) : window_(window_frames)
 void FrameReorder::reset()
 {
     std::fill(sizes_.begin(), sizes_.end(), 0);
+    stats_ = Stats();
     next_frame_ = 0;
     limit_ = 0;
     base_seq_ = 0;
@@ -45,16 +46,20 @@ FrameReorder::Outcome FrameReorder::feed(std::uint16_t seq,
         static_cast<std::uint16_t>(base_seq_ + next_frame_);
     const std::int16_t delta = static_cast<std::int16_t>(seq - expected);
     if (delta < 0) {
+        stats_.duplicates++;
         return Outcome::duplicate;
     }
     const std::uint64_t index = next_frame_ + static_cast<std::uint64_t>(delta);
     if (index >= limit_) {
+        stats_.outside++;
         return Outcome::outside;
     }
     if (delta > 0) {
         if (static_cast<std::size_t>(delta) > window_) {
+            stats_.ahead++;
             return Outcome::ahead;
         }
+        stats_.buffered++;
         const std::size_t slot = index % window_;
         if (sizes_[slot] == 0 && size > 0) {
             std::memcpy(&buffer_[slot * kMaxFramePayload], payload, size);
