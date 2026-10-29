@@ -52,10 +52,17 @@ struct QueuedEvent {
 
 const char *TAG = "trailcamhub_session";
 
+#ifdef CONFIG_SESSION_AUTO_START
+const bool kAutoStart = true;
+#else
+const bool kAutoStart = false;
+#endif
+
 const session::Config kConfig = {
     CONFIG_SESSION_WIFI_JOIN_TIMEOUT_S * 1000u,
     CONFIG_SESSION_RETRY_DELAY_MIN_S * 1000u,
     CONFIG_SESSION_RETRY_DELAY_MAX_S * 1000u,
+    kAutoStart,
 };
 
 QueueHandle_t s_events;
@@ -68,6 +75,44 @@ session::Fsm s_fsm(kConfig);
 char s_ssid[MAX_SSID_LEN + 1];
 char s_password[MAX_PASSWORD_LEN + 1];
 esp_ip4_addr_t s_gateway;
+
+session_status_cb_t s_status_callback;
+// Camera Wi-Fi name for the status callback; unlike the password it is kept.
+char s_status_ssid[MAX_SSID_LEN + 1];
+
+session_status_t to_status(session::State state)
+{
+    switch (state) {
+    case session::State::idle:
+        return SESSION_STATUS_IDLE;
+    case session::State::ble_activation:
+        return SESSION_STATUS_SEARCHING;
+    case session::State::wifi_join:
+        return SESSION_STATUS_CONNECTING;
+    case session::State::session:
+        return SESSION_STATUS_CONNECTED;
+    case session::State::backoff:
+        return SESSION_STATUS_RETRY_WAIT;
+    }
+    return SESSION_STATUS_IDLE;
+}
+
+void notify_status(const session::Result &result)
+{
+    if (s_status_callback == NULL) {
+        return;
+    }
+    session_status_info_t info = {};
+    info.status = to_status(result.next);
+    if (result.next == session::State::wifi_join ||
+        result.next == session::State::session) {
+        strcpy(info.ssid, s_status_ssid);
+    }
+    if (result.next == session::State::backoff) {
+        info.retry_delay_ms = result.timer_ms;
+    }
+    s_status_callback(&info);
+}
 
 void post_event(const QueuedEvent &event)
 {
@@ -224,6 +269,7 @@ void controller_task(void *arg)
             s_fsm.state() == session::State::ble_activation) {
             strcpy(s_ssid, event.ssid);
             strcpy(s_password, event.password);
+            strcpy(s_status_ssid, event.ssid);
         }
         wipe(event.password, sizeof(event.password));
         if (event.type == session::Event::wifi_connected) {
@@ -252,6 +298,7 @@ void controller_task(void *arg)
                      (unsigned)(result.timer_ms / 1000));
         }
         execute(result);
+        notify_status(result);
         if (result.actions & session::kConnectWifi) {
             wipe(s_password, sizeof(s_password));
         }
@@ -259,6 +306,21 @@ void controller_task(void *arg)
 }
 
 }  // namespace
+
+void session_controller_set_status_callback(session_status_cb_t callback)
+{
+    s_status_callback = callback;
+}
+
+void session_controller_request_search(void)
+{
+    post_event(make_event(session::Event::user_start));
+}
+
+void session_controller_request_stop(void)
+{
+    post_event(make_event(session::Event::user_stop));
+}
 
 esp_err_t session_controller_init(void)
 {

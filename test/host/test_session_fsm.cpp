@@ -137,3 +137,81 @@ TEST_CASE("state and event names")
     CHECK(std::string(to_string(State::wifi_join)) == "WIFI_JOIN");
     CHECK(std::string(to_string(Event::session_ended)) == "session ended");
 }
+
+TEST_CASE("without auto start the machine waits for the user")
+{
+    Config config = kConfig;
+    config.auto_start = false;
+    Fsm fsm(config);
+
+    Result result = fsm.handle(Event::start);
+    CHECK(result.next == State::idle);
+    CHECK(result.actions == kNone);
+
+    result = fsm.handle(Event::user_start);
+    CHECK(result.next == State::ble_activation);
+    CHECK(result.actions == kResumeBle);
+}
+
+TEST_CASE("user_start skips the backoff delay and resets it")
+{
+    Fsm fsm(kConfig);
+    fsm.handle(Event::start);
+    fsm.handle(Event::credentials_received);
+    fsm.handle(Event::wifi_failed);
+    REQUIRE(fsm.state() == State::backoff);
+
+    Result result = fsm.handle(Event::user_start);
+    CHECK(result.next == State::ble_activation);
+    CHECK(has(result, kCancelTimer));
+    CHECK(has(result, kResumeBle));
+    CHECK(fsm.next_retry_delay_ms() == 5000);
+}
+
+TEST_CASE("user_stop returns to idle from every active state")
+{
+    {
+        Fsm fsm(kConfig);
+        fsm.handle(Event::start);
+        Result result = fsm.handle(Event::user_stop);
+        CHECK(result.next == State::idle);
+        CHECK(has(result, kPauseBle));
+    }
+    {
+        Fsm fsm(kConfig);
+        fsm.handle(Event::start);
+        fsm.handle(Event::credentials_received);
+        Result result = fsm.handle(Event::user_stop);
+        CHECK(result.next == State::idle);
+        CHECK(has(result, kCancelTimer));
+        CHECK(has(result, kDisconnectWifi));
+    }
+    {
+        Fsm fsm(kConfig);
+        fsm.handle(Event::start);
+        fsm.handle(Event::credentials_received);
+        fsm.handle(Event::wifi_failed);
+        Result result = fsm.handle(Event::user_stop);
+        CHECK(result.next == State::idle);
+        CHECK(has(result, kCancelTimer));
+    }
+    {
+        Fsm fsm(kConfig);
+        CHECK_FALSE(fsm.handle(Event::user_stop).handled);
+    }
+}
+
+TEST_CASE("user_stop in a session ends in idle after the session ended")
+{
+    Fsm fsm(kConfig);
+    reach_session(fsm);
+
+    Result result = fsm.handle(Event::user_stop);
+    CHECK(result.next == State::session);
+    CHECK(has(result, kStopSession));
+    CHECK(has(result, kDisconnectWifi));
+
+    result = fsm.handle(Event::session_ended);
+    CHECK(result.next == State::idle);
+    CHECK(has(result, kDisconnectWifi));
+}

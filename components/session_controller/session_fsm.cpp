@@ -39,7 +39,11 @@ Result Fsm::handle(Event event)
 {
     switch (state_) {
     case State::idle:
-        if (event == Event::start) {
+        if (event == Event::start && !config_.auto_start) {
+            return transition(State::idle, kNone);
+        }
+        if (event == Event::start || event == Event::user_start) {
+            retry_delay_ms_ = config_.retry_delay_min_ms;
             return transition(State::ble_activation, kResumeBle);
         }
         break;
@@ -49,6 +53,9 @@ Result Fsm::handle(Event event)
             return transition(State::wifi_join,
                               kPauseBle | kConnectWifi | kStartTimer,
                               config_.wifi_join_timeout_ms);
+        }
+        if (event == Event::user_stop) {
+            return transition(State::idle, kPauseBle);
         }
         break;
 
@@ -61,6 +68,9 @@ Result Fsm::handle(Event event)
         if (event == Event::wifi_failed || event == Event::timeout) {
             return enter_backoff(kCancelTimer | kDisconnectWifi);
         }
+        if (event == Event::user_stop) {
+            return transition(State::idle, kCancelTimer | kDisconnectWifi);
+        }
         // Disconnects while joining are retried by the Wi-Fi module.
         break;
 
@@ -69,7 +79,15 @@ Result Fsm::handle(Event event)
             // Stay in this state until the session has ended.
             return {state_, state_, kStopSession | kDisconnectWifi, 0, true};
         }
+        if (event == Event::user_stop) {
+            stop_requested_ = true;
+            return {state_, state_, kStopSession | kDisconnectWifi, 0, true};
+        }
         if (event == Event::session_ended) {
+            if (stop_requested_) {
+                stop_requested_ = false;
+                return transition(State::idle, kDisconnectWifi);
+            }
             return enter_backoff(kDisconnectWifi);
         }
         break;
@@ -77,6 +95,13 @@ Result Fsm::handle(Event event)
     case State::backoff:
         if (event == Event::timeout) {
             return transition(State::ble_activation, kResumeBle);
+        }
+        if (event == Event::user_start) {
+            retry_delay_ms_ = config_.retry_delay_min_ms;
+            return transition(State::ble_activation, kCancelTimer | kResumeBle);
+        }
+        if (event == Event::user_stop) {
+            return transition(State::idle, kCancelTimer);
         }
         break;
     }
@@ -117,6 +142,10 @@ const char *to_string(Event event)
         return "session ended";
     case Event::timeout:
         return "timeout";
+    case Event::user_start:
+        return "user start";
+    case Event::user_stop:
+        return "user stop";
     }
     return "unknown";
 }

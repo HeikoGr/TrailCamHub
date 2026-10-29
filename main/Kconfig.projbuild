@@ -39,6 +39,15 @@ config DIAG_MEMORY_LOG_INTERVAL_S
 
 menu "Session"
 
+config SESSION_AUTO_START
+    bool "Search for the camera at boot"
+    default y
+    help
+        When disabled, the device stays idle after boot until the user
+        requests a search (for example with a button or a web page).
+        Failed attempts are still retried automatically until the user
+        stops them.
+
 config SESSION_WIFI_JOIN_TIMEOUT_S
     int "Camera Wi-Fi join timeout (seconds)"
     range 5 300

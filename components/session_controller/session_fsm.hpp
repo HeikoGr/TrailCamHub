@@ -27,6 +27,10 @@ enum class Event : std::uint8_t {
     wifi_failed,
     session_ended,
     timeout,
+    // The user asks to search for the camera now (for example a button press).
+    user_start,
+    // The user asks to stop searching or to end the running session.
+    user_stop,
 };
 
 // Actions as bit flags. The controller executes them in the order of the
@@ -47,6 +51,8 @@ struct Config {
     std::uint32_t wifi_join_timeout_ms;
     std::uint32_t retry_delay_min_ms;
     std::uint32_t retry_delay_max_ms;
+    // False: stay idle after Event::start until Event::user_start.
+    bool auto_start = true;
 };
 
 struct Result {
@@ -78,6 +84,8 @@ class Fsm
     Config config_;
     State state_{State::idle};
     std::uint32_t retry_delay_ms_;
+    // Set by user_stop during a session; the session ends in idle, not backoff.
+    bool stop_requested_{false};
 };
 
 const char *to_string(State state);
