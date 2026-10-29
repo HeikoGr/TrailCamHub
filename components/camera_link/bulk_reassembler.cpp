@@ -25,15 +25,36 @@ void BulkReassembler::reset()
     buffer_.clear();
     seen_.clear();
     received_frames_ = 0;
-    needed_frames_ = 0;
     received_bytes_ = 0;
     total_ = 0;
     total_frames_ = 0;
     ver_ = 0;
     typ_ = 0;
     len_ = 0;
+    base_seq_ = 0;
     have_header_ = false;
     invalid_ = false;
+}
+
+void BulkReassembler::place_frame(std::uint16_t seq,
+                                  const std::uint8_t *payload, std::size_t size)
+{
+    // The camera's bulk sequence is a running counter, not record-relative, so
+    // address each frame by its distance from the header frame's sequence.
+    const std::uint16_t rel = static_cast<std::uint16_t>(seq - base_seq_);
+    if (rel >= total_frames_) {
+        return;  // stale, wrapped, or belongs to another record
+    }
+    const std::size_t offset = static_cast<std::size_t>(rel) * kFramePayload;
+    if (buffer_.size() < offset + size) {
+        buffer_.resize(offset + size, 0);
+    }
+    std::memcpy(buffer_.data() + offset, payload, size);
+    if (!seen_[rel]) {
+        seen_[rel] = true;
+        ++received_frames_;
+        received_bytes_ += size;
+    }
 }
 
 BulkReassembler::Status BulkReassembler::feed(std::uint16_t seq,
@@ -47,62 +68,31 @@ BulkReassembler::Status BulkReassembler::feed(std::uint16_t seq,
         return Status::incomplete;
     }
 
-    const std::size_t offset = static_cast<std::size_t>(seq) * kFramePayload;
-    const std::size_t need = offset + size;
-    if (need > kMaxRecordSize) {
-        invalid_ = true;
-        return Status::invalid;
-    }
-    if (buffer_.size() < need) {
-        buffer_.resize(need, 0);
-    }
-    std::memcpy(buffer_.data() + offset, payload, size);
-
-    bool is_new = false;
-    if (seen_.size() <= seq) {
-        seen_.resize(static_cast<std::size_t>(seq) + 1, false);
-    }
-    if (!seen_[seq]) {
-        seen_[seq] = true;
-        is_new = true;
-        ++received_frames_;
-        received_bytes_ += size;
-    }
-
-    bool just_parsed_header = false;
-    if (seq == 0 && !have_header_) {
-        if (size < 20) {
-            return Status::incomplete;  // header not fully present yet
-        }
-        if (std::memcmp(buffer_.data(), kSignature, sizeof(kSignature)) != 0) {
+    if (!have_header_) {
+        // The first frame of a record carries the 20-byte ARTEMIS header and
+        // sets the base sequence; anything else here is not a record start.
+        if (size < 20 ||
+            std::memcmp(payload, kSignature, sizeof(kSignature)) != 0) {
             invalid_ = true;
             return Status::invalid;
         }
-        ver_ = read_u32_le(buffer_.data() + 8);
-        typ_ = read_u32_le(buffer_.data() + 12);
-        len_ = read_u32_le(buffer_.data() + 16);
+        ver_ = read_u32_le(payload + 8);
+        typ_ = read_u32_le(payload + 12);
+        len_ = read_u32_le(payload + 16);
         total_ = 20 + static_cast<std::size_t>(len_);
         if (total_ == 0 || total_ > kMaxRecordSize) {
             invalid_ = true;
             return Status::invalid;
         }
         total_frames_ = (total_ + kFramePayload - 1) / kFramePayload;
+        base_seq_ = seq;
         have_header_ = true;
-        just_parsed_header = true;
-        // Count frames already buffered that fall within the record.
-        needed_frames_ = 0;
-        for (std::size_t i = 0; i < total_frames_ && i < seen_.size(); ++i) {
-            if (seen_[i]) {
-                ++needed_frames_;
-            }
-        }
+        seen_.assign(total_frames_, false);
     }
 
-    if (have_header_ && !just_parsed_header && is_new && seq < total_frames_) {
-        ++needed_frames_;
-    }
+    place_frame(seq, payload, size);
 
-    if (have_header_ && needed_frames_ >= total_frames_) {
+    if (received_frames_ >= total_frames_) {
         buffer_.resize(total_);  // trim any over-allocation
         return Status::complete;
     }

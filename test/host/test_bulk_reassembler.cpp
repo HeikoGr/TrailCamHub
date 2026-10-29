@@ -97,30 +97,32 @@ TEST_CASE("BulkReassembler reassembles the full thumbnail record")
     CHECK(r.payload()[73] == 0xd8);
 }
 
-TEST_CASE("BulkReassembler accepts frames out of order and ignores duplicates")
+TEST_CASE("BulkReassembler handles a running sequence that does not start at 0")
 {
+    // The camera's bulk sequence is a global counter: a record's first frame
+    // can arrive with any base sequence (here 10). Later frames also come out
+    // of order with a duplicate.
     BulkReassembler r;
-    // A small 3-frame record: header says len = 2*1024 + 10 = 2058.
-    std::vector<std::uint8_t> seq0(kFrame, 0);
+    std::vector<std::uint8_t> hdr(kFrame, 0);  // header-bearing frame
     const std::uint8_t sig[8] = {'A', 'R', 'T', 'E', 'M', 'I', 'S', 0};
-    std::copy(sig, sig + 8, seq0.begin());
+    std::copy(sig, sig + 8, hdr.begin());
     const std::uint32_t len = 2058;  // payload after the 20-byte header
-    seq0[16] = len & 0xff;
-    seq0[17] = (len >> 8) & 0xff;
+    hdr[16] = len & 0xff;
+    hdr[17] = (len >> 8) & 0xff;
     const std::size_t total = 20 + len;  // 2078 -> 3 frames (1024,1024,30)
 
-    auto f1 = frame(kFrame, 0xb1);
-    auto f2 = frame(total - 2 * kFrame, 0xb2);  // 30 bytes
+    auto mid = frame(kFrame, 0xb1);
+    auto last = frame(total - 2 * kFrame, 0xb2);  // 30 bytes
 
-    // Out of order: 2, 0, 2 (dup), 1.
-    CHECK(r.feed(2, f2.data(), f2.size()) ==
-          BulkReassembler::Status::incomplete);
-    CHECK(r.feed(0, seq0.data(), seq0.size()) ==
-          BulkReassembler::Status::incomplete);
-    CHECK(r.feed(2, f2.data(), f2.size()) ==
-          BulkReassembler::Status::incomplete);  // duplicate, no progress
-    CHECK(r.feed(1, f1.data(), f1.size()) == BulkReassembler::Status::complete);
+    CHECK(r.feed(10, hdr.data(), hdr.size()) ==
+          BulkReassembler::Status::incomplete);  // base = 10
     CHECK(r.total_frames() == 3);
+    CHECK(r.feed(12, last.data(), last.size()) ==
+          BulkReassembler::Status::incomplete);
+    CHECK(r.feed(12, last.data(), last.size()) ==
+          BulkReassembler::Status::incomplete);  // duplicate, no progress
+    CHECK(r.feed(11, mid.data(), mid.size()) ==
+          BulkReassembler::Status::complete);
     CHECK(r.received_bytes() == total);
 }
 

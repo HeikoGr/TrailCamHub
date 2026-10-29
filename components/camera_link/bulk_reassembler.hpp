@@ -80,16 +80,21 @@ class BulkReassembler
     }
 
   private:
+    // Places one frame at its record offset, relative to the header frame's
+    // sequence. Frames outside the record (stale/wrapped) are ignored.
+    void place_frame(std::uint16_t seq, const std::uint8_t *payload,
+                     std::size_t size);
+
     std::vector<std::uint8_t> buffer_;
-    std::vector<bool> seen_;
-    std::size_t received_frames_ = 0;  // distinct seqs seen (any range)
-    std::size_t needed_frames_ = 0;    // distinct seqs seen within [0,total)
+    std::vector<bool> seen_;           // indexed by frame-relative position
+    std::size_t received_frames_ = 0;  // distinct in-record frames seen
     std::size_t received_bytes_ = 0;
     std::size_t total_ = 0;
     std::size_t total_frames_ = 0;
     std::uint32_t ver_ = 0;
     std::uint32_t typ_ = 0;
     std::uint32_t len_ = 0;
+    std::uint16_t base_seq_ = 0;  // sequence of the header-bearing frame
     bool have_header_ = false;
     bool invalid_ = false;
 };
