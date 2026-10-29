@@ -74,6 +74,13 @@ The **LilyGO T-Dongle-S3** is a USB stick with an ESP32-S3 (16 MB flash, no PSRA
 
 The display pins (MOSI GPIO3, SCLK GPIO5, CS GPIO4, DC GPIO2, RST GPIO1, backlight GPIO38, active low) are fixed in `components/dongle_ui/st7735_display.cpp`. The APA102 RGB LED (clock GPIO39, data GPIO40) shows a random colour at full brightness until it receives data, so `dongle_ui` switches it off when it starts (about a second after power-up). With `CONFIG_DONGLE_LED_BRIGHTNESS` (1-31, default 0 = off) it shows the phase in the colour of the display title instead, at that global brightness. Still to verify on hardware: display orientation and colours, and BLE plus Wi-Fi operation without PSRAM.
 
+| | | |
+|---|---|---|
+| ![READY: press the button to search; network, key and address of the web UI](docs/images/dongle/ready.png) | ![SEARCHING: looking for the camera via Bluetooth](docs/images/dongle/searching.png) | ![CONNECTING: joining the camera Wi-Fi](docs/images/dongle/connecting.png) |
+| ![CONNECTED: saving media 2 of 3](docs/images/dongle/connected.png) | ![NO LINK: next try in 12 s](docs/images/dongle/retry.png) | ![FINISHED: saved 3 of 3 files, with the web UI access](docs/images/dongle/finished.png) |
+
+The screenshots are drawn by `tools/dongle_screens` with the same rendering code as the firmware (`status_screen.cpp`, `screen_renderer.cpp`, `font5x7.cpp`); the network name and key are example values. After changing a screen, regenerate them with `cmake -S tools/dongle_screens -B build-screens && cmake --build build-screens && build-screens/dongle_screens docs/images/dongle`; CI fails if they are out of date.
+
 The **T-Dongle-C5** ([LilyGO repository](https://github.com/Xinyuan-LilyGO/T-Dongle-C5), schematic `hardware/T-Dongle-C5 V1.1.pdf`) is built for the `esp32c5` target with `sdkconfig.defaults.tdongle-c5`, which enables `CONFIG_BOARD_TDONGLE_C5`. It behaves like the T-Dongle-S3, with these differences:
 
 - **ESP32-C5HR8** (RISC-V, dual-band Wi-Fi 6, BLE 5) with 8 MB quad PSRAM in the package and 16 MB flash, so the common PSRAM settings stay on. The image requires chip revision v1.0 or later.
