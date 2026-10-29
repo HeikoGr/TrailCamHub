@@ -17,8 +17,10 @@ want — `trailcamhub-esp32s3-dev.bin` (verbose logs) or
 `trailcamhub-esp32s3-release.bin` (release):
 
 ```sh
-esptool.py --chip esp32s3 --port PORT --baud 460800 write_flash 0x0 trailcamhub-esp32s3-dev.bin
+esptool --chip esp32s3 --port PORT --baud 460800 write-flash 0x0 trailcamhub-esp32s3-dev.bin
 ```
+
+This is the esptool v5 command syntax; older esptool releases name the script `esptool.py` and the command `write_flash`.
 
 Replace `PORT` with the board's serial port. On Linux this is commonly `/dev/ttyACM0` or `/dev/ttyUSB0`; on macOS it is commonly `/dev/cu.usbmodem...`; on Windows it is a `COM` port.
 
