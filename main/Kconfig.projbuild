@@ -1,5 +1,18 @@
 menu "TrailCamHub PoC"
 
+config BOARD_TDONGLE_S3
+    bool "LilyGO T-Dongle-S3 display and button"
+    depends on IDF_TARGET_ESP32S3
+    default n
+    help
+        Show the camera workflow status on the 0.96" display and use the
+        button on the back (GPIO0) to search for the camera. Selected by
+        sdkconfig.defaults.tdongle-s3.
+
+config BOARD_TDONGLE
+    bool
+    default y if BOARD_TDONGLE_S3
+
 config CAMERA_WIFI_ENABLE_PAYLOAD_HEX
     string "Wi-Fi enable payload (hex)"
     default "42545F4B45595F4F4E"

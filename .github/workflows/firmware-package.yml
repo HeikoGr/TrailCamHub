@@ -28,6 +28,10 @@ jobs:
           - board: esp32s3
             target: esp32s3
             board_defaults: ""
+          # LilyGO T-Dongle-S3 with display and button (artifact only)
+          - board: tdongle-s3
+            target: esp32s3
+            board_defaults: sdkconfig.defaults.tdongle-s3
     env:
       IDF_PATH: /opt/esp/idf
       BOARD: ${{ matrix.board }}

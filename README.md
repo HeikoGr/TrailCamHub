@@ -60,6 +60,20 @@ The firmware configuration (`sdkconfig.defaults`, `sdkconfig.defaults.esp32s3`, 
 
 A camera and a cellular subscription are required for testing. Camera credentials and SIM PINs must not be committed to the repository.
 
+### Alternative board: LilyGO T-Dongle-S3 (display and button)
+
+The **LilyGO T-Dongle-S3** is a USB stick with an ESP32-S3 (16 MB flash, no PSRAM), a 0.96" ST7735 display (160x80), a button on the back (GPIO0, the BOOT button) and a microSD slot. It has no uplink of its own; it is meant for testing the camera workflow on the bench. The firmware is built for the `esp32s3` target with `sdkconfig.defaults.tdongle-s3` on top of the common defaults, which enables `CONFIG_BOARD_TDONGLE_S3` and adapts the configuration:
+
+- **No automatic search.** `CONFIG_SESSION_AUTO_START` is off: after boot the dongle waits until the button is pressed. Failed attempts are still retried with the increasing delay until the user stops them; after a session that did all its work the dongle shows *FINISHED* instead of connecting to the camera again.
+- **Button.** A short press starts the search for the camera (BLE scan, Wi-Fi enable, Wi-Fi join); during a retry delay it starts the next attempt at once. Holding the button for 1.5 s stops searching or ends the running session and returns to idle.
+- **Display.** The `dongle_ui` component shows only the current phase: a coloured title (*READY*, *SEARCHING*, *CONNECTING*, *CONNECTED*, *NO LINK*, *FINISHED*), the camera Wi-Fi name once the camera has reported it, the download progress (*Saving media n/m*, *Saved n of m files*), the countdown to the next attempt, and a hint for the button; with the [web UI](#web-ui), the idle and finished screens also show its network name, password and address. Content is redrawn only when it changes. The screen content (`status_screen.cpp`) and its drawing (`screen_renderer.cpp`, `font5x7.cpp`) have no ESP-IDF dependencies and are host-tested.
+- **No PSRAM.** PSRAM is disabled and the NimBLE host allocates from internal RAM.
+- **Console** on the native USB port (USB-Serial-JTAG).
+- **SD card** in 1-bit mode on CLK GPIO12, CMD GPIO16, D0 GPIO14, with the [log](#log-on-the-sd-card) on it.
+- **Photo download** on (**Media download → Download photos to the SD card**, described with the other `menuconfig` options below); the UDP receive mailbox is raised to 16 packets so frames are not lost while the card is busy. The Base64 thumbnail is left out of the log (`CONFIG_CAMERA_THUMBNAIL_SERIAL_PREVIEW` off).
+
+The display pins (MOSI GPIO3, SCLK GPIO5, CS GPIO4, DC GPIO2, RST GPIO1, backlight GPIO38, active low) are fixed in `components/dongle_ui/st7735_display.cpp`. Still to verify on hardware: display orientation and colours, and BLE plus Wi-Fi operation without PSRAM.
+
 ### Web UI
 
 With `CONFIG_WEB_UI_ENABLE` (**TrailCamHub PoC → Web UI** in `menuconfig`, off by default; not on the ESP32-P4) the `web_ui` component opens a WPA2 access point `TrailCamHub-XXXX` next to the camera station (AP+STA) and serves a page at `http://10.42.0.1`. Its password (10 characters from an alphabet without characters that look alike on a small display, such as `g`, `q` and `9`) is generated at the first boot and stored in NVS, and `web_ui_password()` returns it for a display; a stored password from an earlier firmware that contains such characters is replaced once; a fixed password can be set in `menuconfig`. The page shows the workflow status and the download progress, has buttons to search for the camera and to stop, browses the SD card (photos and videos with their thumbnails), shows images, videos, audio and text files, offers every file for download and deletion (two taps: *Delete*, then *Delete?* within three seconds) and follows the current log file of `sd_log` live. Directories, the log file being written and unfinished files (`.part`, `.tmp`) cannot be deleted, because removing a file that is open for writing corrupts the FAT volume. A deleted photo or video stays marked as downloaded in the catalog, so it is not downloaded again.
@@ -108,6 +122,17 @@ idf.py menuconfig
 idf.py build flash monitor
 ```
 
+For the T-Dongle-S3, add the board defaults (the VS Code task **ESP-IDF: Build T-Dongle-S3 firmware** runs the same build):
+
+```sh
+idf.py -B build-tdongle-s3 -D IDF_TARGET=esp32s3 \
+    -D SDKCONFIG=build-tdongle-s3/sdkconfig \
+    -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tdongle-s3" \
+    build flash monitor
+```
+
+If flashing fails, hold the button while plugging the dongle in to enter the download mode.
+
 #### Project structure
 
 The firmware is split into ESP-IDF components with explicit dependencies:
@@ -119,6 +144,7 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/camera_wifi` | Wi-Fi station for the camera access point; runs a session callback after each connection |
 | `components/camera_link` | Camera session over UDP: discovery, PRE_LOGIN, PPPP/ARTEMIS packets, ALIVE, heartbeats; media list, thumbnails, photo and video download |
 | `components/sd_storage` | microSD card mount |
+| `components/dongle_ui` | Status display and search button (T-Dongle-S3 only) |
 | `components/web_ui` | Access point and web UI: status, search/stop, file browser and download, live log |
 | `components/sd_log` | Copy of the log output in text files on the SD card |
 | `components/diagnostics` | Reset reason, core dump status, and heap statistics |

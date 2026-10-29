@@ -1,9 +1,9 @@
 /*
  * This module starts the log copy on the SD card, initializes diagnostics,
  * persistent storage, the SD card and the network stack, starts the web UI
- * where enabled, then hands over to the session controller, which runs the
- * camera workflow. The BLE stack is started by the camera BLE module when it
- * is needed.
+ * and the dongle display where enabled, then hands over to the session
+ * controller, which runs the camera workflow. The BLE stack is started by the
+ * camera BLE module when it is needed.
  */
 
 #include "esp_err.h"
@@ -14,6 +14,7 @@
 #include "sdkconfig.h"
 
 #include "camera_protocol.h"
+#include "dongle_ui.h"
 #include "sd_card.h"
 #include "sd_log.h"
 #include "session_controller.h"
@@ -22,13 +23,44 @@
 
 static const char *TAG = "trailcamhub";
 
-#if CONFIG_WEB_UI_ENABLE
+#if CONFIG_BOARD_TDONGLE || CONFIG_WEB_UI_ENABLE
 #define HAS_STATUS_OUTPUT 1
+#if CONFIG_BOARD_TDONGLE
+static bool s_display_ready;
+#endif
+#if CONFIG_WEB_UI_ENABLE
 static bool s_web_ready;
+#endif
 
-// Passes the workflow status to the web UI.
+// Passes the workflow status to the display and the web UI.
 static void on_session_status(const session_status_info_t *info)
 {
+#if CONFIG_BOARD_TDONGLE
+    if (s_display_ready) {
+        dongle_ui_phase_t phase = DONGLE_UI_IDLE;
+        switch (info->status) {
+        case SESSION_STATUS_IDLE:
+            break;
+        case SESSION_STATUS_SEARCHING:
+            phase = DONGLE_UI_SEARCHING;
+            break;
+        case SESSION_STATUS_CONNECTING:
+            phase = DONGLE_UI_CONNECTING;
+            break;
+        case SESSION_STATUS_CONNECTED:
+            phase = DONGLE_UI_CONNECTED;
+            break;
+        case SESSION_STATUS_RETRY_WAIT:
+            phase = DONGLE_UI_RETRY_WAIT;
+            break;
+        case SESSION_STATUS_FINISHED:
+            phase = DONGLE_UI_FINISHED;
+            break;
+        }
+        dongle_ui_set_status(phase, info->ssid, info->retry_delay_ms);
+    }
+#endif
+#if CONFIG_WEB_UI_ENABLE
     if (s_web_ready) {
         const char *phase = "idle";
         switch (info->status) {
@@ -52,13 +84,21 @@ static void on_session_status(const session_status_info_t *info)
         }
         web_ui_set_status(phase, info->ssid, info->retry_delay_ms);
     }
+#endif
 }
 
 static void on_media_progress(uint32_t done, uint32_t stored, uint32_t total)
 {
+#if CONFIG_BOARD_TDONGLE
+    if (s_display_ready) {
+        dongle_ui_set_media_progress(done, stored, total);
+    }
+#endif
+#if CONFIG_WEB_UI_ENABLE
     if (s_web_ready) {
         web_ui_set_media_progress(done, stored, total);
     }
+#endif
 }
 #endif
 
@@ -110,6 +150,22 @@ extern "C" void app_main(void)
     if (!s_web_ready) {
         ESP_LOGW(TAG, "Continuing without web UI");
     }
+#endif
+#if CONFIG_BOARD_TDONGLE
+    static const dongle_ui_callbacks_t ui_callbacks = {
+        .on_search = session_controller_request_search,
+        .on_stop = session_controller_request_stop,
+    };
+    s_display_ready = dongle_ui_start(&ui_callbacks) == ESP_OK;
+    if (!s_display_ready) {
+        ESP_LOGW(TAG, "Continuing without display and button");
+    }
+#if CONFIG_WEB_UI_ENABLE
+    if (s_display_ready && s_web_ready) {
+        dongle_ui_set_web_access(web_ui_ssid(), web_ui_password(),
+                                 web_ui_url());
+    }
+#endif
 #endif
 #if HAS_STATUS_OUTPUT
     session_controller_set_status_callback(on_session_status);

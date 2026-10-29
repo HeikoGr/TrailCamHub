@@ -1,6 +1,6 @@
-# TrailCamHub ESP32-S3 Deployment Package
+# TrailCamHub Deployment Package
 
-This archive contains the firmware images for the ESP32-S3 BLE/Wi-Fi proof of concept, built for the Waveshare ESP32-S3-A7670E-4G board (16 MB flash, 8 MB PSRAM).
+This archive contains the firmware images for the BLE/Wi-Fi proof of concept. `BUILD_INFO.txt` names the board: `esp32s3` packages are built for the Waveshare ESP32-S3-A7670E-4G board (16 MB flash, 8 MB PSRAM), `tdongle-s3` packages for the LilyGO T-Dongle-S3 (see [T-Dongle-S3](#t-dongle-s3) below). The sections up to that one describe the ESP32-S3 package.
 
 ## Browser installer
 
@@ -35,3 +35,15 @@ After the camera returns Wi-Fi credentials over BLE, the firmware joins the came
 At boot the firmware logs the reset reason, the available PSRAM, and memory statistics, and mounts a FAT-formatted microSD card at `/sdcard` if one is inserted. The card is never formatted by the firmware. The partition table provides two 4 MB OTA slots and a core dump partition; OTA updates themselves are not implemented yet. The image requires the board's 16 MB flash and octal PSRAM; on hardware without PSRAM it stops during boot.
 
 The firmware logs status over its serial console. Use an authorized camera and review its status before leaving the device unattended.
+
+## T-Dongle-S3
+
+The `trailcamhub-tdongle-s3` package contains the firmware built for the LilyGO T-Dongle-S3 (ESP32-S3, 16 MB flash, no PSRAM). It is not offered by the browser installer. Plug the dongle into a USB port and flash the merged image over its native USB port:
+
+```sh
+esptool --chip esp32s3 --port PORT --baud 460800 write-flash 0x0 trailcamhub-tdongle-s3-dev.bin
+```
+
+If esptool cannot connect, hold the BOOT button while plugging the dongle in; it then starts in download mode. The serial console is on the same USB port.
+
+The dongle does not search for the camera at boot. Press the button to search for the camera and connect; hold it for 1.5 seconds to stop. The display shows the current phase, the camera Wi-Fi name and, during a session, the number of the file being saved. With a FAT-formatted microSD card inserted, the firmware stores the thumbnails and then downloads every photo the camera lists (first page, up to 45 items) that is not on the card yet, to `/<camera-id>/media/`; the photo download is not yet verified on hardware. When everything is done, the display shows FINISHED; press the button to sync again. The log is also written to `/logs/log-NNNNN.txt` on the card, so a test run can be read afterwards without a serial console.
