@@ -5,9 +5,9 @@
 #include "esp_err.h"
 
 /*
- * Status display and search button of the LilyGO T-Dongle-S3. The component
- * knows nothing about the camera workflow: the application reports the phase
- * and receives the button actions through callbacks.
+ * Status display and search button of the LilyGO T-Dongle-S3 and T-Dongle-C5.
+ * The component knows nothing about the camera workflow: the application
+ * reports the phase and receives the button actions through callbacks.
  */
 
 typedef enum {

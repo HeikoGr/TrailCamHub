@@ -9,9 +9,19 @@ config BOARD_TDONGLE_S3
         button on the back (GPIO0) to search for the camera. Selected by
         sdkconfig.defaults.tdongle-s3.
 
+config BOARD_TDONGLE_C5
+    bool "LilyGO T-Dongle-C5 display and button"
+    depends on IDF_TARGET_ESP32C5
+    default n
+    help
+        Show the camera workflow status on the 0.96" display and use the
+        button (GPIO28) to search for the camera. The display shares its
+        SPI bus with the microSD card. Selected by
+        sdkconfig.defaults.tdongle-c5.
+
 config BOARD_TDONGLE
     bool
-    default y if BOARD_TDONGLE_S3
+    default y if BOARD_TDONGLE_S3 || BOARD_TDONGLE_C5
 
 config DONGLE_LED_BRIGHTNESS
     int "RGB LED brightness (0: off)"

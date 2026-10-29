@@ -45,6 +45,20 @@
       },
       "problemMatcher": [],
       "group": "build"
+    },
+    {
+      "label": "ESP-IDF: Build T-Dongle-C5 firmware",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "source \"$IDF_PATH/export.sh\" >/dev/null && idf.py -B build-tdongle-c5 -D IDF_TARGET=esp32c5 -D SDKCONFIG=build-tdongle-c5/sdkconfig -D SDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.tdongle-c5' build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": "build"
     }
   ]
 }

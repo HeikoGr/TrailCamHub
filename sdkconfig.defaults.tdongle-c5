@@ -1,0 +1,42 @@
+# Board: LilyGO T-Dongle-C5 (ESP32-C5HR8 with 8 MB PSRAM in package, 16 MB
+# flash, 0.96" ST7735 display, button on GPIO28, microSD slot on the
+# display's SPI bus). Build with the esp32c5 target and
+#   SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tdongle-c5"
+# so that these settings override the common defaults.
+
+CONFIG_BOARD_TDONGLE_C5=y
+
+# Searching starts with a press of the button.
+# CONFIG_SESSION_AUTO_START is not set
+
+# Console: the native USB port (USB-Serial-JTAG) is the only serial link.
+# CONFIG_ESP_CONSOLE_UART_DEFAULT is not set
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# microSD card in SPI mode (the ESP32-C5 has no SDMMC host), sharing SPI2
+# with the display: SCK GPIO6, MOSI GPIO2, MISO GPIO7, CS GPIO23.
+CONFIG_SD_CARD_CLK_GPIO=6
+CONFIG_SD_CARD_CMD_GPIO=2
+CONFIG_SD_CARD_D0_GPIO=7
+CONFIG_SD_CARD_CS_GPIO=23
+
+# Download photos, then videos (as raw H.264 and AAC streams), to the SD
+# card after the thumbnails.
+CONFIG_CAMERA_DOWNLOAD_PHOTOS=y
+CONFIG_CAMERA_DOWNLOAD_VIDEOS=y
+
+# While a video is downloaded, send a heartbeat every 500 ms instead of every
+# 1.5 s: the camera streamed about two video frames per heartbeat (an
+# experiment, see docs/video-download.md).
+CONFIG_CAMERA_VIDEO_HEARTBEAT_INTERVAL_MS=500
+
+# Queue more camera frames while an SD card write blocks the session task
+# (default 6); frames that still do not fit are resent by the camera.
+CONFIG_LWIP_UDP_RECVMBOX_SIZE=16
+
+# Web UI over the dongle's own access point (http://10.42.0.1); the password
+# is generated at the first boot and shown on the display.
+CONFIG_WEB_UI_ENABLE=y
+
+# The thumbnails are on the SD card; no Base64 copy in the log.
+# CONFIG_CAMERA_THUMBNAIL_SERIAL_PREVIEW is not set

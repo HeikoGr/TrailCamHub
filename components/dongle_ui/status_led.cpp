@@ -9,8 +9,13 @@
 
 #include "status_led.h"
 
+#if CONFIG_BOARD_TDONGLE_C5
+#define LED_PIN_CLOCK GPIO_NUM_4
+#define LED_PIN_DATA GPIO_NUM_5
+#else
 #define LED_PIN_CLOCK GPIO_NUM_39
 #define LED_PIN_DATA GPIO_NUM_40
+#endif
 
 static const char *TAG = "trailcamhub_led";
 

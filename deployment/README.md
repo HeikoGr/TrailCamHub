@@ -1,6 +1,6 @@
 # TrailCamHub Deployment Package
 
-This archive contains the firmware images for the BLE/Wi-Fi proof of concept. `BUILD_INFO.txt` names the board: `esp32s3` packages are built for the Waveshare ESP32-S3-A7670E-4G board (16 MB flash, 8 MB PSRAM), `tdongle-s3` packages for the LilyGO T-Dongle-S3 (see [T-Dongle-S3](#t-dongle-s3) below). The sections up to that one describe the ESP32-S3 package.
+This archive contains the firmware images for the BLE/Wi-Fi proof of concept. `BUILD_INFO.txt` names the board: `esp32s3` packages are built for the Waveshare ESP32-S3-A7670E-4G board (16 MB flash, 8 MB PSRAM), `tdongle-s3` and `tdongle-c5` packages for the LilyGO T-Dongle-S3 and T-Dongle-C5 (see [T-Dongle](#t-dongle-s3-and-t-dongle-c5) below). The sections up to that one describe the ESP32-S3 package.
 
 ## Browser installer
 
@@ -36,14 +36,19 @@ At boot the firmware logs the reset reason, the available PSRAM, and memory stat
 
 The firmware logs status over its serial console. Use an authorized camera and review its status before leaving the device unattended.
 
-## T-Dongle-S3
+## T-Dongle-S3 and T-Dongle-C5
 
-The `trailcamhub-tdongle-s3` package contains the firmware built for the LilyGO T-Dongle-S3 (ESP32-S3, 16 MB flash, no PSRAM). It is not offered by the browser installer. Plug the dongle into a USB port and flash the merged image over its native USB port:
+The `trailcamhub-tdongle-s3` package contains the firmware built for the LilyGO T-Dongle-S3 (ESP32-S3, 16 MB flash, no PSRAM), the `trailcamhub-tdongle-c5` package the firmware for the LilyGO T-Dongle-C5 (ESP32-C5, 16 MB flash, 8 MB PSRAM). The two images are not interchangeable. They are not offered by the browser installer. Plug the dongle into a USB port and flash the merged image over its native USB port:
 
 ```sh
+# T-Dongle-S3
 esptool --chip esp32s3 --port PORT --baud 460800 write-flash 0x0 trailcamhub-tdongle-s3-dev.bin
+# T-Dongle-C5
+esptool --chip esp32c5 --port PORT --baud 460800 write-flash 0x0 trailcamhub-tdongle-c5-dev.bin
 ```
 
 If esptool cannot connect, hold the BOOT button while plugging the dongle in; it then starts in download mode. The serial console is on the same USB port.
 
-The dongle does not search for the camera at boot. Press the button to search for the camera and connect; hold it for 1.5 seconds to stop. The display shows the current phase, the camera Wi-Fi name and, during a session, the number of the file being saved. With a FAT-formatted microSD card inserted, the firmware stores the thumbnails and then downloads every photo the camera lists (first page, up to 45 items) that is not on the card yet, to `/<camera-id>/media/`; the photo download is not yet verified on hardware. When everything is done, the display shows FINISHED; press the button to sync again. The log is also written to `/logs/log-NNNNN.txt` on the card, so a test run can be read afterwards without a serial console.
+The dongle does not search for the camera at boot. Press the button to search for the camera and connect; hold it for 1.5 seconds to stop. The display shows the current phase, the camera Wi-Fi name and, during a session, the number of the file being saved. With a FAT-formatted microSD card inserted, the firmware stores the thumbnails and then downloads every photo the camera lists (first page, up to 45 items) that is not on the card yet, to `/<camera-id>/media/`. The T-Dongle-C5 also downloads the videos, as a raw H.264 file (plays in VLC) and an AAC file each. Photo and video download are not yet verified on hardware. When everything is done, the display shows FINISHED; press the button to sync again.
+
+On the T-Dongle-C5 the firmware also opens a Wi-Fi network `TrailCamHub-XXXX`. Its password and the address `http://10.42.0.1` are shown on the display while the dongle is idle. The web page there starts and stops the search, shows the progress, lists the files on the SD card for viewing and download, and shows the live log. On all boards with an SD card the log is also written to `/logs/log-NNNNN.txt` on the card, so a test run can be read afterwards without a serial console.

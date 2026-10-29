@@ -1,6 +1,7 @@
 /*
  * This module drives the 0.96" ST7735S panel (80x160) of the LilyGO
- * T-Dongle-S3 over SPI with the esp_lcd panel IO layer.
+ * T-Dongle-S3 and T-Dongle-C5 over SPI with the esp_lcd panel IO layer. Both
+ * boards use the same panel; only the wiring differs.
  */
 
 #include "driver/gpio.h"
@@ -17,6 +18,18 @@
 #include "st7735_display.h"
 
 #define LCD_SPI_HOST SPI2_HOST
+#if CONFIG_BOARD_TDONGLE_C5
+// T-Dongle-C5 wiring. The microSD card shares the bus (MISO GPIO7, CS
+// GPIO23); whichever driver starts first initializes it.
+#define LCD_PIN_MOSI GPIO_NUM_2
+#define LCD_PIN_MISO GPIO_NUM_7
+#define LCD_PIN_SCLK GPIO_NUM_6
+#define LCD_PIN_CS GPIO_NUM_10
+#define LCD_PIN_DC GPIO_NUM_3
+#define LCD_PIN_RST GPIO_NUM_1
+// Active low.
+#define LCD_PIN_BACKLIGHT GPIO_NUM_0
+#else
 // T-Dongle-S3 wiring.
 #define LCD_PIN_MOSI GPIO_NUM_3
 #define LCD_PIN_MISO GPIO_NUM_NC
@@ -26,6 +39,7 @@
 #define LCD_PIN_RST GPIO_NUM_1
 // Active low.
 #define LCD_PIN_BACKLIGHT GPIO_NUM_38
+#endif
 #define LCD_SPI_CLOCK_HZ (20 * 1000 * 1000)
 
 // The 80x160 window sits inside the 132x162 RAM of the controller; the offsets
@@ -141,8 +155,8 @@ esp_err_t st7735_init(void)
     bus.quadwp_io_num = -1;
     bus.quadhd_io_num = -1;
     bus.max_transfer_sz = ST7735_WIDTH * ST7735_HEIGHT * 2;
-    // When the SD card shares the bus in SPI mode, its driver has set it up
-    // (with a large enough maximum transfer size).
+    // On the T-Dongle-C5 the SD card driver sets up the shared bus (with a
+    // large enough maximum transfer size) unless the card is disabled.
     if (!sd_card_spi_bus_ready()) {
         ESP_RETURN_ON_ERROR(
             spi_bus_initialize(LCD_SPI_HOST, &bus, SPI_DMA_CH_AUTO), TAG,

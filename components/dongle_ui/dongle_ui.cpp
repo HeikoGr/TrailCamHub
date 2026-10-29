@@ -26,7 +26,11 @@
 #include "status_screen.hpp"
 
 // The button of the dongle is the BOOT button; it pulls to ground.
+#if CONFIG_BOARD_TDONGLE_C5
+#define BUTTON_GPIO GPIO_NUM_28
+#else
 #define BUTTON_GPIO GPIO_NUM_0
+#endif
 #define BUTTON_POLL_MS 10
 #define BUTTON_DEBOUNCE_MS 30
 #define BUTTON_LONG_PRESS_MS 1500

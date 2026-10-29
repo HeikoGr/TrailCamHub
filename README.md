@@ -60,7 +60,7 @@ The firmware configuration (`sdkconfig.defaults`, `sdkconfig.defaults.esp32s3`, 
 
 A camera and a cellular subscription are required for testing. Camera credentials and SIM PINs must not be committed to the repository.
 
-### Alternative board: LilyGO T-Dongle-S3 (display and button)
+### Alternative boards: LilyGO T-Dongle-S3 and T-Dongle-C5 (display and button)
 
 The **LilyGO T-Dongle-S3** is a USB stick with an ESP32-S3 (16 MB flash, no PSRAM), a 0.96" ST7735 display (160x80), a button on the back (GPIO0, the BOOT button) and a microSD slot. It has no uplink of its own; it is meant for testing the camera workflow on the bench. The firmware is built for the `esp32s3` target with `sdkconfig.defaults.tdongle-s3` on top of the common defaults, which enables `CONFIG_BOARD_TDONGLE_S3` and adapts the configuration:
 
@@ -73,6 +73,18 @@ The **LilyGO T-Dongle-S3** is a USB stick with an ESP32-S3 (16 MB flash, no PSRA
 - **Photo download** on (**Media download → Download photos to the SD card**, described with the other `menuconfig` options below); the UDP receive mailbox is raised to 16 packets so frames are not lost while the card is busy. The Base64 thumbnail is left out of the log (`CONFIG_CAMERA_THUMBNAIL_SERIAL_PREVIEW` off).
 
 The display pins (MOSI GPIO3, SCLK GPIO5, CS GPIO4, DC GPIO2, RST GPIO1, backlight GPIO38, active low) are fixed in `components/dongle_ui/st7735_display.cpp`. The APA102 RGB LED (clock GPIO39, data GPIO40) shows a random colour at full brightness until it receives data, so `dongle_ui` switches it off when it starts (about a second after power-up). With `CONFIG_DONGLE_LED_BRIGHTNESS` (1-31, default 0 = off) it shows the phase in the colour of the display title instead, at that global brightness. Still to verify on hardware: display orientation and colours, and BLE plus Wi-Fi operation without PSRAM.
+
+The **T-Dongle-C5** ([LilyGO repository](https://github.com/Xinyuan-LilyGO/T-Dongle-C5), schematic `hardware/T-Dongle-C5 V1.1.pdf`) is built for the `esp32c5` target with `sdkconfig.defaults.tdongle-c5`, which enables `CONFIG_BOARD_TDONGLE_C5`. It behaves like the T-Dongle-S3, with these differences:
+
+- **ESP32-C5HR8** (RISC-V, dual-band Wi-Fi 6, BLE 5) with 8 MB quad PSRAM in the package and 16 MB flash, so the common PSRAM settings stay on. The image requires chip revision v1.0 or later.
+- **Button** on GPIO28.
+- **Display** on MOSI GPIO2, SCLK GPIO6, CS GPIO10, DC GPIO3, RST GPIO1, backlight GPIO0 (active low); same panel, orientation and offsets as on the T-Dongle-S3.
+- **SD card in SPI mode** (`CONFIG_SD_CARD_SPI_MODE`, forced because the ESP32-C5 has no SDMMC host). The card shares SPI2 with the display: SCK GPIO6, MOSI GPIO2, MISO GPIO7, CS GPIO23. The SD driver initializes the bus with a maximum transfer size large enough for a display frame and leaves it initialized when no card is found; the display driver then uses that bus (`sd_card_spi_bus_ready()`). The SPI driver serializes the transfers of both devices.
+- **RGB LED** on clock GPIO4, data GPIO5.
+- **Web UI** on (`CONFIG_WEB_UI_ENABLE`, see [Web UI](#web-ui)); its network name, password and address are on the idle and finished screens.
+- **Video download** on (`CONFIG_CAMERA_DOWNLOAD_VIDEOS`, which needs PSRAM), in addition to the photos. The heartbeat interval during a video is 500 ms (`CONFIG_CAMERA_VIDEO_HEARTBEAT_INTERVAL_MS`), an experiment explained in [docs/video-download.md](docs/video-download.md).
+
+Still to verify on hardware: the display and the SD card on the shared bus, the web UI, and the photo and video download. The first boots (chip revision v1.0, 8 MB PSRAM, SD card mounted over SPI, BLE activation, camera Wi-Fi and thumbnails) have been checked.
 
 ### Web UI
 
@@ -122,12 +134,17 @@ idf.py menuconfig
 idf.py build flash monitor
 ```
 
-For the T-Dongle-S3, add the board defaults (the VS Code task **ESP-IDF: Build T-Dongle-S3 firmware** runs the same build):
+For the T-Dongles, add the board defaults (the VS Code tasks **ESP-IDF: Build T-Dongle-S3 firmware** and **ESP-IDF: Build T-Dongle-C5 firmware** run the same builds):
 
 ```sh
 idf.py -B build-tdongle-s3 -D IDF_TARGET=esp32s3 \
     -D SDKCONFIG=build-tdongle-s3/sdkconfig \
     -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tdongle-s3" \
+    build flash monitor
+
+idf.py -B build-tdongle-c5 -D IDF_TARGET=esp32c5 \
+    -D SDKCONFIG=build-tdongle-c5/sdkconfig \
+    -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.tdongle-c5" \
     build flash monitor
 ```
 
@@ -144,7 +161,7 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/camera_wifi` | Wi-Fi station for the camera access point; runs a session callback after each connection |
 | `components/camera_link` | Camera session over UDP: discovery, PRE_LOGIN, PPPP/ARTEMIS packets, ALIVE, heartbeats; media list, thumbnails, photo and video download |
 | `components/sd_storage` | microSD card mount |
-| `components/dongle_ui` | Status display and search button (T-Dongle-S3 only) |
+| `components/dongle_ui` | Status display and search button (T-Dongle-S3 and T-Dongle-C5 only) |
 | `components/web_ui` | Access point and web UI: status, search/stop, file browser and download, live log |
 | `components/sd_log` | Copy of the log output in text files on the SD card |
 | `components/diagnostics` | Reset reason, core dump status, and heap statistics |

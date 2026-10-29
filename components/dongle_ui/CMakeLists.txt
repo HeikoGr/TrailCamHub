@@ -1,4 +1,4 @@
-# Display and button of the LilyGO T-Dongle-S3; empty on other boards.
+# Display and button of the LilyGO T-Dongle-S3/-C5; empty on other boards.
 set(srcs)
 if(CONFIG_BOARD_TDONGLE)
     list(APPEND srcs "dongle_ui.cpp" "st7735_display.cpp" "font5x7.cpp"
