@@ -103,4 +103,28 @@ config SD_CARD_D0_GPIO
 
 endmenu
 
+menu "Media download"
+    depends on SD_CARD_ENABLE
+
+config CAMERA_DOWNLOAD_PHOTOS
+    bool "Download photos to the SD card"
+    default n
+    help
+        After the thumbnails, download every photo of the camera's media
+        list that is not on the SD card yet to /sdcard/<camera>/media/.
+        The file is streamed to the card while it arrives, so it is never
+        held in RAM. Videos are not downloaded: the camera sends them only
+        as a playback stream (cmdId 769), not as a file.
+
+config CAMERA_DOWNLOAD_STALL_TIMEOUT_S
+    int "Abort a download after this many seconds without data"
+    depends on CAMERA_DOWNLOAD_PHOTOS
+    range 5 300
+    default 20
+    help
+        The partial file is removed and the next item is requested. The
+        item is tried again in the next session.
+
+endmenu
+
 endmenu

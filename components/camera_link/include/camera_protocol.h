@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 #include "esp_netif.h"
@@ -23,3 +24,15 @@ void camera_protocol_request_stop(void);
  * list, thumbnails, downloads) was done, not because of a stop or an error.
  */
 bool camera_protocol_work_completed(void);
+
+/*
+ * Progress of the media download in the running session: `done` of `total`
+ * files handled, `stored` of them saved to the SD card. Called from the camera
+ * session task when the download list is known and after each file; must
+ * return quickly.
+ */
+typedef void (*camera_protocol_progress_cb_t)(uint32_t done, uint32_t stored,
+                                              uint32_t total);
+
+/* Registers the progress callback; call before the first session. */
+void camera_protocol_set_progress_callback(camera_protocol_progress_cb_t cb);

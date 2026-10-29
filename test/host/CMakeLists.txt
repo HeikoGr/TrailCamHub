@@ -37,6 +37,7 @@ add_executable(host_tests
     test_media_list.cpp
     test_media_transfer.cpp
     test_bulk_reassembler.cpp
+    test_bulk_stream.cpp
     test_device_info.cpp
     test_media_catalog.cpp
     test_media_store.cpp
@@ -57,6 +58,8 @@ add_executable(host_tests
     ${link_dir}/media_list.cpp
     ${link_dir}/media_transfer.cpp
     ${link_dir}/bulk_reassembler.cpp
+    ${link_dir}/bulk_stream.cpp
+    ${link_dir}/frame_reorder.cpp
     ${link_dir}/device_info.cpp
     ${link_dir}/media_catalog.cpp
     ${link_dir}/camera_prelogin.cpp

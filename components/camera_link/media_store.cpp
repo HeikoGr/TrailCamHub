@@ -1,5 +1,6 @@
 #include "media_store.hpp"
 
+#include <algorithm>
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -133,6 +134,87 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
         }
     }
     return true;
+}
+
+// Larger stdio buffer for downloads: fewer, larger FAT writes.
+constexpr size_t kMediaWriteBuffer = 8 * 1024;
+
+bool MediaFileWriter::open(const std::string &camera_id, std::int64_t dir,
+                           std::int64_t num)
+{
+    abort();
+    const std::string camera = camera_dir(camera_id);
+    const std::string media = camera + "/media";
+    if (!ensure_dir(camera) || !ensure_dir(media))
+        return false;
+    char name[48];
+    snprintf(name, sizeof(name), "/%lld_%lld", (long long)dir, (long long)num);
+    base_ = media + name;
+    path_.clear();
+    head_size_ = 0;
+    const std::string part = base_ + ".part";
+    file_ = fopen(part.c_str(), "wb");
+    if (file_ == nullptr) {
+        ESP_LOGW(TAG, "open %s for write failed: errno %d", part.c_str(),
+                 errno);
+        return false;
+    }
+    setvbuf(file_, nullptr, _IOFBF, kMediaWriteBuffer);
+    return true;
+}
+
+bool MediaFileWriter::write(const std::uint8_t *data, std::size_t size)
+{
+    if (file_ == nullptr)
+        return false;
+    const size_t head = std::min(size, sizeof(head_) - head_size_);
+    memcpy(head_ + head_size_, data, head);
+    head_size_ += head;
+    if (fwrite(data, 1, size, file_) != size) {
+        ESP_LOGW(TAG, "write %s.part failed: errno %d", base_.c_str(), errno);
+        return false;
+    }
+    return true;
+}
+
+bool MediaFileWriter::finish(std::int64_t media_time)
+{
+    if (file_ == nullptr)
+        return false;
+    const std::string part = base_ + ".part";
+    const bool closed = fclose(file_) == 0;
+    file_ = nullptr;
+    if (!closed) {
+        ESP_LOGW(TAG, "close %s failed: errno %d", part.c_str(), errno);
+        remove(part.c_str());
+        return false;
+    }
+    const std::string path = base_ + "." + media_extension(head_, head_size_);
+    remove(path.c_str());
+    if (rename(part.c_str(), path.c_str()) != 0) {
+        ESP_LOGW(TAG, "rename %s failed: errno %d", path.c_str(), errno);
+        remove(part.c_str());
+        return false;
+    }
+    path_ = path;
+    if (media_time > 0) {
+        struct utimbuf times;
+        times.actime = static_cast<time_t>(media_time);
+        times.modtime = static_cast<time_t>(media_time);
+        if (utime(path.c_str(), &times) != 0) {
+            ESP_LOGW(TAG, "utime %s failed: errno %d", path.c_str(), errno);
+        }
+    }
+    return true;
+}
+
+void MediaFileWriter::abort()
+{
+    if (file_ == nullptr)
+        return;
+    fclose(file_);
+    file_ = nullptr;
+    remove((base_ + ".part").c_str());
 }
 
 }  // namespace camera::store

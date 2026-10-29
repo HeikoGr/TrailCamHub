@@ -26,6 +26,7 @@
 #include "camera_protocol.h"
 #include "camera_udp_transport.h"
 #include "bulk_reassembler.hpp"
+#include "bulk_stream.hpp"
 #include "device_info.hpp"
 #include "media_catalog.hpp"
 #include "media_store.hpp"
@@ -34,6 +35,7 @@
 #include "media_list.hpp"
 #include "media_transfer.hpp"
 #include "pppp_session.hpp"
+#include "sdkconfig.h"
 
 #define CAMERA_DISCOVERY_LOCAL_PORT 35281
 #define CAMERA_DISCOVERY_TIMEOUT_MS 1500
@@ -41,6 +43,29 @@
 #define CAMERA_PRELOGIN_RECEIVE_TIMEOUT_MS 1000
 #define CAMERA_RUDP_RECEIVE_TIMEOUT_MS 500
 #define CAMERA_RUDP_HEARTBEAT_INTERVAL_MS 1500
+// Frames buffered ahead of a missing one while streaming a download (1 KB
+// each); later frames are not acknowledged, so the camera resends them.
+// The window is one block of up to 1472 bytes per frame, in PSRAM if there is
+// one; without, internal RAM is too short for more.
+#if CONFIG_SPIRAM
+#define CAMERA_DOWNLOAD_REORDER_FRAMES 32
+#else
+#define CAMERA_DOWNLOAD_REORDER_FRAMES 8
+#endif
+// Log a download's progress every this many bytes.
+#define CAMERA_DOWNLOAD_LOG_INTERVAL_BYTES (256u * 1024u)
+
+#ifdef CONFIG_CAMERA_DOWNLOAD_PHOTOS
+static const bool kDownloadPhotos = true;
+#else
+static const bool kDownloadPhotos = false;
+#endif
+// Videos are not offered by the file download (cmdId 1285): the camera
+// acknowledges the request but sends nothing, so only photos are fetched.
+static const bool kDownloadVideos = false;
+#ifndef CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S
+#define CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S 20
+#endif
 
 static const char *TAG = "trailcamhub_protocol";
 static const uint16_t s_camera_discovery_ports[] = {40611, 3333};
@@ -270,6 +295,22 @@ static uint16_t s_bulk_window[16];
 static size_t s_bulk_window_count;
 static bool s_bulk_active;
 
+// Media download state, reset at the start of each session. A download is
+// active from its request (cmdId 1285) until its record is complete or it is
+// aborted.
+static std::vector<camera::artemis::CatalogEntry> s_download_queue;
+static size_t s_download_index;
+static size_t s_download_stored;
+static bool s_download_active;
+static int64_t s_download_progress_us;
+static int64_t s_download_started_us;
+static uint64_t s_download_logged_bytes;
+static camera::artemis::BulkStream
+    s_download_stream(camera::artemis::kMediaRecordHeaderSize,
+                      CAMERA_DOWNLOAD_REORDER_FRAMES);
+static camera::store::MediaFileWriter s_media_file;
+static camera_protocol_progress_cb_t s_progress_callback;
+
 static bool from_camera(const struct sockaddr_in *source,
                         const struct sockaddr_in *camera_address)
 {
@@ -388,6 +429,8 @@ static bool send_artemis_command(uint32_t cmd_id, const char *extra_fields,
     return true;
 }
 
+static void start_downloads();
+
 // Requests the thumbnail (cmdId 772) for the current queue item, if any. The
 // reply streams back on the bulk channel; handle_bulk_frame() stores it and
 // advances the queue. Returns false when the queue is exhausted.
@@ -398,9 +441,7 @@ static bool request_current_thumbnail()
                  (unsigned)s_catalog.count_with_flag(
                      camera::artemis::MediaCatalog::kThumbPresent),
                  (unsigned)s_catalog.size());
-        // Nothing left to fetch this cycle: let the session loop close the
-        // connection cleanly.
-        s_work_done = true;
+        start_downloads();
         return false;
     }
     const camera::artemis::CatalogEntry &e = s_thumb_queue[s_thumb_index];
@@ -462,6 +503,213 @@ emit_thumbnail_jpeg(const uint8_t *jpeg, size_t jpeg_size,
     free(b64);
 }
 
+static void report_download_progress()
+{
+    if (s_progress_callback != nullptr) {
+        s_progress_callback(static_cast<uint32_t>(s_download_index),
+                            static_cast<uint32_t>(s_download_stored),
+                            static_cast<uint32_t>(s_download_queue.size()));
+    }
+}
+
+// Requests the full file (cmdId 1285) for the current download queue item and
+// opens its file on the SD card. The file streams back on the bulk channel;
+// handle_download_frame() writes it. When the queue is exhausted, the session
+// is closed.
+static void request_current_download()
+{
+    while (s_download_index < s_download_queue.size()) {
+        const camera::artemis::CatalogEntry &e =
+            s_download_queue[s_download_index];
+        if (!s_media_file.open(s_camera_id, e.dir_num, e.media_num)) {
+            ESP_LOGW(TAG, "Cannot write to the SD card; stopping downloads");
+            s_download_index = s_download_queue.size();
+            break;
+        }
+        const std::string extra =
+            ",\"downloadReqs\":[{\"fileType\":" + std::to_string(e.file_type) +
+            ",\"dirNum\":" + std::to_string(e.dir_num) +
+            ",\"mediaNum\":" + std::to_string(e.media_num) + "}]";
+        if (send_artemis_command(1285, extra.c_str(), "ARTEMIS Download")) {
+            ESP_LOGI(TAG, "Downloading %s dir %lld num %lld (%u of %u)",
+                     e.file_type == 0 ? "photo" : "video", (long long)e.dir_num,
+                     (long long)e.media_num, (unsigned)(s_download_index + 1),
+                     (unsigned)s_download_queue.size());
+            s_download_stream.reset();
+            s_download_active = true;
+            s_download_started_us = esp_timer_get_time();
+            s_download_progress_us = s_download_started_us;
+            s_download_logged_bytes = 0;
+            return;
+        }
+        s_media_file.abort();
+        ++s_download_index;
+        report_download_progress();
+    }
+    ESP_LOGI(TAG, "Downloads complete: %u of %u catalog items on the SD card",
+             (unsigned)s_catalog.count_with_flag(
+                 camera::artemis::MediaCatalog::kFileDownloaded),
+             (unsigned)s_catalog.size());
+    s_work_done = true;
+}
+
+// Builds the download queue once the thumbnails are done. Without enabled
+// downloads, the session is closed right away.
+static void start_downloads()
+{
+    s_download_queue =
+        s_catalog.missing_downloads(kDownloadPhotos, kDownloadVideos);
+    s_download_index = 0;
+    s_download_stored = 0;
+    if (kDownloadPhotos || kDownloadVideos) {
+        ESP_LOGI(TAG, "%u files to download",
+                 (unsigned)s_download_queue.size());
+    }
+    report_download_progress();
+    request_current_download();
+}
+
+// Ends the current download: on success the file gets its final name and the
+// catalog records it; otherwise the partial file is removed and the item is
+// tried again in a later session. Then the next item is requested, unless
+// `stop_all` (the SD card failed).
+static void finish_current_download(bool stored, bool stop_all)
+{
+    using camera::artemis::MediaCatalog;
+    const camera::artemis::CatalogEntry &e = s_download_queue[s_download_index];
+    if (stored && s_media_file.finish(e.media_time)) {
+        const int64_t elapsed_ms =
+            (esp_timer_get_time() - s_download_started_us) / 1000;
+        const uint64_t bytes = s_download_stream.delivered_bytes() -
+                               s_download_stream.prefix().size();
+        ESP_LOGI(TAG, "Stored %s (%llu bytes in %lld ms, %llu KB/s)",
+                 s_media_file.path().c_str(), (unsigned long long)bytes,
+                 (long long)elapsed_ms,
+                 (unsigned long long)(elapsed_ms > 0 ? bytes / elapsed_ms : 0));
+        s_catalog.set_flag(e.dir_num, e.media_num,
+                           MediaCatalog::kFileDownloaded);
+        camera::store::save_catalog(s_camera_id, s_catalog);
+        ++s_download_stored;
+    } else {
+        s_media_file.abort();
+        ESP_LOGW(TAG, "Download of dir %lld num %lld failed",
+                 (long long)e.dir_num, (long long)e.media_num);
+    }
+    s_download_stream.reset();
+    s_download_active = false;
+    s_bulk_active = false;
+    s_bulk_window_count = 0;
+    ++s_download_index;
+    if (stop_all) {
+        ESP_LOGW(TAG, "SD card write failed; stopping downloads");
+        s_download_index = s_download_queue.size();
+    }
+    report_download_progress();
+    request_current_download();
+}
+
+// Handles one bulk frame of a running download: passes it to the stream,
+// which writes the file in order, and acknowledges the frames it took.
+static void handle_download_frame(int socket_fd,
+                                  const struct sockaddr_in *camera_address,
+                                  uint8_t subtype, uint16_t seq,
+                                  const uint8_t *payload, size_t payload_len,
+                                  bool is_record_start)
+{
+    using camera::artemis::BulkStream;
+    if (!s_download_stream.header_ready() && !is_record_start) {
+        // Leftover of an earlier record: acknowledge it so the camera stops
+        // resending it.
+        camera::ArtemisBulkAckRequest stray_ack;
+        if (stray_ack.build(subtype, &seq, 1)) {
+            send_udp_request(socket_fd, camera_address, "BULK ACK (stray)",
+                             stray_ack);
+        }
+        return;
+    }
+    if (!s_download_stream.header_ready()) {
+        s_bulk_window_count = 0;
+        s_bulk_subtype = subtype;
+        s_bulk_active = true;
+    }
+
+    bool sink_failed = false;
+    const BulkStream::Sink sink = [&sink_failed](const uint8_t *data,
+                                                 size_t size) {
+        sink_failed = !s_media_file.write(data, size);
+        return !sink_failed;
+    };
+    const uint64_t before = s_download_stream.delivered_bytes();
+    bool ack = false;
+    const BulkStream::Status status =
+        s_download_stream.feed(seq, payload, payload_len, sink, ack);
+    if (ack) {
+        bulk_window_push(seq);
+        camera::ArtemisBulkAckRequest window_ack;
+        if (window_ack.build(subtype, s_bulk_window, s_bulk_window_count)) {
+            send_udp_request(socket_fd, camera_address, "BULK ACK", window_ack);
+        }
+    }
+
+    const uint64_t delivered = s_download_stream.delivered_bytes();
+    if (delivered > before) {
+        s_download_progress_us = esp_timer_get_time();
+    }
+    if (before == 0 && s_download_stream.header_ready()) {
+        ESP_LOGI(TAG, "Download record start: subtype 0x%02x, %u bytes",
+                 (unsigned)subtype, (unsigned)s_download_stream.record_len());
+    }
+    if (delivered - s_download_logged_bytes >=
+        CAMERA_DOWNLOAD_LOG_INTERVAL_BYTES) {
+        s_download_logged_bytes = delivered;
+        ESP_LOGI(TAG, "Download: %llu of %u bytes",
+                 (unsigned long long)delivered,
+                 (unsigned)s_download_stream.record_len());
+    }
+
+    if (status == BulkStream::Status::invalid) {
+        if (!sink_failed) {
+            const size_t dump = payload_len < 24 ? payload_len : 24;
+            ESP_LOGW(TAG, "Download record invalid; first bytes:");
+            ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload, dump, ESP_LOG_WARN);
+        }
+        finish_current_download(false, sink_failed);
+        return;
+    }
+    if (status == BulkStream::Status::complete) {
+        const auto &prefix = s_download_stream.prefix();
+        camera::artemis::MediaRecordHeader header;
+        size_t data_offset = 0;
+        size_t data_size = 0;
+        const camera::artemis::CatalogEntry &e =
+            s_download_queue[s_download_index];
+        if (camera::artemis::parse_media_record(
+                prefix.data(), prefix.size(), header, data_offset, data_size) &&
+            (header.dir_num != e.dir_num || header.media_num != e.media_num)) {
+            ESP_LOGW(TAG,
+                     "Download record is for dir %lld num %lld, requested "
+                     "dir %lld num %lld; discarding it",
+                     (long long)header.dir_num, (long long)header.media_num,
+                     (long long)e.dir_num, (long long)e.media_num);
+            finish_current_download(false, false);
+            return;
+        }
+        finish_current_download(true, false);
+    }
+}
+
+// Aborts the current download if no data arrived for the stall timeout.
+static void check_download_stall(int64_t now_us)
+{
+    if (s_download_active &&
+        now_us - s_download_progress_us >
+            CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S * 1000000LL) {
+        ESP_LOGW(TAG, "No download data for %d s; skipping the file",
+                 CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S);
+        finish_current_download(false, false);
+    }
+}
+
 // Handles one bulk-stream frame (D0/D1 subtype 0x03/0x04): feeds the
 // reassembler, acknowledges the window so the camera advances to the next
 // frames, and on completion extracts and emits the JPEG.
@@ -477,6 +725,14 @@ static void handle_bulk_frame(int socket_fd,
     const size_t payload_len = size - 8;
     const bool is_record_start =
         payload_len >= 20 && memcmp(payload, kSig, sizeof(kSig)) == 0;
+
+    // Thumbnails keep subtype 0x04; any other subtype during a download is
+    // the requested file (0x03 for photos).
+    if (s_download_active && subtype != 0x04) {
+        handle_download_frame(socket_fd, camera_address, subtype, seq, payload,
+                              payload_len, is_record_start);
+        return;
+    }
 
     if (!s_bulk_active || subtype != s_bulk_subtype) {
         // A record only begins on its header-bearing (ARTEMIS) frame. Any
@@ -652,6 +908,18 @@ static void process_artemis_response(const SessionEvent &event)
     ESP_LOGI(TAG, "ARTEMIS response cmdId %lld: %s", (long long)cmd_id,
              message.json.c_str());
 
+    // The camera acknowledges a download request before streaming the file;
+    // a non-zero result means it will not send it.
+    if (cmd_id == 1285 && s_download_active) {
+        int64_t result = 0;
+        if (json_find_int(message.json, "result", result) && result != 0) {
+            ESP_LOGW(TAG, "Camera refused the download (result %lld)",
+                     (long long)result);
+            finish_current_download(false, false);
+        }
+        return;
+    }
+
     // Parse the media list into the typed model and log a short summary, so
     // the model is exercised against the real response on hardware too.
     if (cmd_id == 768) {
@@ -720,10 +988,9 @@ static void process_artemis_response(const SessionEvent &event)
 // Keeps the ARTEMIS session alive with heartbeats (one at a time, sent
 // after the previous one was acknowledged) and logs everything received
 // until the camera closes the session or a stop is requested.
-static esp_err_t
-wait_for_artemis_packets(int socket_fd,
-                         const struct sockaddr_in *camera_address,
-                         int64_t discovery_started_us)
+static esp_err_t run_artemis_session(int socket_fd,
+                                     const struct sockaddr_in *camera_address,
+                                     int64_t discovery_started_us)
 {
     camera::ArtemisHeartbeatPayload heartbeat;
     uint16_t heartbeat_index = 0;
@@ -747,6 +1014,10 @@ wait_for_artemis_packets(int socket_fd,
     s_bulk_subtype = 0;
     s_bulk_window_count = 0;
     s_bulk_active = false;
+    s_download_queue.clear();
+    s_download_index = 0;
+    s_download_active = false;
+    s_download_stream.reset();
     ESP_LOGI(TAG, "Starting ARTEMIS heartbeat loop");
 
     while (!stop_requested()) {
@@ -759,6 +1030,7 @@ wait_for_artemis_packets(int socket_fd,
             return ESP_OK;
         }
         int64_t now_us = esp_timer_get_time();
+        check_download_stall(now_us);
         // Pause the session heartbeat during a bulk transfer: it would not be
         // acknowledged while the camera is streaming, and its retransmissions
         // only compete with our frame ACKs on the uplink.
@@ -865,6 +1137,23 @@ wait_for_artemis_packets(int socket_fd,
         }
     }
     return ESP_OK;
+}
+
+// Runs the ARTEMIS session and removes the partial file of a download that
+// the end of the session interrupted.
+static esp_err_t
+wait_for_artemis_packets(int socket_fd,
+                         const struct sockaddr_in *camera_address,
+                         int64_t discovery_started_us)
+{
+    const esp_err_t error =
+        run_artemis_session(socket_fd, camera_address, discovery_started_us);
+    if (s_media_file.is_open()) {
+        ESP_LOGW(TAG, "Session ended during a download; partial file removed");
+        s_media_file.abort();
+    }
+    s_download_active = false;
+    return error;
 }
 
 static esp_err_t send_prelogin(int socket_fd,
@@ -1078,4 +1367,9 @@ void camera_protocol_request_stop(void)
 bool camera_protocol_work_completed(void)
 {
     return s_work_done;
+}
+
+void camera_protocol_set_progress_callback(camera_protocol_progress_cb_t cb)
+{
+    s_progress_callback = cb;
 }
