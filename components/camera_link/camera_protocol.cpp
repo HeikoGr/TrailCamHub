@@ -470,12 +470,30 @@ static void handle_bulk_frame(int socket_fd,
                               const uint8_t *packet, size_t size)
 {
     using namespace camera::artemis;
+    static const uint8_t kSig[8] = {'A', 'R', 'T', 'E', 'M', 'I', 'S', 0};
     const uint8_t subtype = packet[5];
     const uint16_t seq = static_cast<uint16_t>((packet[6] << 8) | packet[7]);
     const uint8_t *payload = packet + 8;
     const size_t payload_len = size - 8;
+    const bool is_record_start =
+        payload_len >= 20 && memcmp(payload, kSig, sizeof(kSig)) == 0;
 
     if (!s_bulk_active || subtype != s_bulk_subtype) {
+        // A record only begins on its header-bearing (ARTEMIS) frame. Any
+        // other frame received between records is a retransmit of a finished
+        // record or a reordered straggler: acknowledge it so the camera stops
+        // resending and moves on, but do not start a record on it.
+        if (!is_record_start) {
+            camera::ArtemisBulkAckRequest stray_ack;
+            if (stray_ack.build(subtype, &seq, 1)) {
+                send_udp_request(socket_fd, camera_address, "BULK ACK (stray)",
+                                 stray_ack);
+            }
+            ESP_LOGD(TAG,
+                     "BULK subtype 0x%02x seq %u: stray frame ignored (%u B)",
+                     (unsigned)subtype, (unsigned)seq, (unsigned)payload_len);
+            return;
+        }
         s_bulk.reset();
         s_bulk_window_count = 0;
         s_bulk_subtype = subtype;
