@@ -16,4 +16,11 @@ namespace camera::artemis
 bool json_find_int(const std::string &json, const std::string &key,
                    std::int64_t &out, std::size_t from = 0);
 
+// Reads a string field from a (flat) JSON object: finds "key" followed by ':'
+// and a double-quoted value. Returns false if the key is absent or not
+// followed by a string. Handles the common backslash escapes (\" \\ \/ \n \t
+// \r). `from` scopes the lookup as in json_find_int.
+bool json_find_string(const std::string &json, const std::string &key,
+                      std::string &out, std::size_t from = 0);
+
 }  // namespace camera::artemis

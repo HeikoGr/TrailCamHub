@@ -39,4 +39,59 @@ bool json_find_int(const std::string &json, const std::string &key,
     return true;
 }
 
+bool json_find_string(const std::string &json, const std::string &key,
+                      std::string &out, std::size_t from)
+{
+    const std::string needle = "\"" + key + "\"";
+    std::size_t pos = json.find(needle, from);
+    if (pos == std::string::npos)
+        return false;
+    pos += needle.size();
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'))
+        ++pos;
+    if (pos >= json.size() || json[pos] != ':')
+        return false;
+    ++pos;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'))
+        ++pos;
+    if (pos >= json.size() || json[pos] != '"')
+        return false;
+    ++pos;  // opening quote
+
+    std::string value;
+    while (pos < json.size()) {
+        const char c = json[pos++];
+        if (c == '"') {
+            out = value;
+            return true;
+        }
+        if (c == '\\' && pos < json.size()) {
+            const char e = json[pos++];
+            switch (e) {
+            case 'n':
+                value.push_back('\n');
+                break;
+            case 't':
+                value.push_back('\t');
+                break;
+            case 'r':
+                value.push_back('\r');
+                break;
+            case 'b':
+                value.push_back('\b');
+                break;
+            case 'f':
+                value.push_back('\f');
+                break;
+            default:
+                value.push_back(e);
+                break;  // \" \\ \/ and others
+            }
+        } else {
+            value.push_back(c);
+        }
+    }
+    return false;  // unterminated string
+}
+
 }  // namespace camera::artemis
