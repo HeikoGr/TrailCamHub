@@ -60,6 +60,27 @@ The firmware configuration (`sdkconfig.defaults`, `sdkconfig.defaults.esp32s3`, 
 
 A camera and a cellular subscription are required for testing. Camera credentials and SIM PINs must not be committed to the repository.
 
+### Alternative board: Waveshare ESP32-P4-NANO (Ethernet uplink)
+
+For installations with a wired network, the firmware can also be built for the **Waveshare ESP32-P4-NANO** (target `esp32p4`). Media is then meant to be transferred over Ethernet instead of the cellular modem. According to the [Waveshare documentation](https://www.waveshare.com/wiki/ESP32-P4-NANO) the board provides:
+
+- ESP32-P4 with 32 MB in-package PSRAM and 16 MB external flash
+- An on-board **ESP32-C6** co-processor for Wi-Fi 6 and BLE 5, connected over SDIO (SDMMC slot 1: CLK GPIO18, CMD GPIO19, D0-D3 GPIO14-17, C6 reset GPIO54). The ESP32-P4 itself has no radio.
+- 10/100 Mbit/s Ethernet with an IP101 PHY on the on-chip EMAC (RMII, reference clock input GPIO50, MDC GPIO31, MDIO GPIO52, PHY reset GPIO51, PHY address 1); optional PoE module
+- microSD slot on SDMMC slot 0 (4-bit, fixed pins CLK GPIO43, CMD GPIO44, D0-D3 GPIO39-42), powered by on-chip LDO channel 4
+- Serial console on UART0 through the USB-to-UART port
+
+`sdkconfig.defaults.esp32p4` adapts the common configuration to this board; the partition table is the same. Differences from the ESP32-S3 build:
+
+- **Wi-Fi and BLE through ESP-Hosted.** The [`esp_wifi_remote`](https://components.espressif.com/components/espressif/esp_wifi_remote) and [`esp_hosted`](https://components.espressif.com/components/espressif/esp_hosted) components are added by the component manager for this target only (see `components/camera_wifi/idf_component.yml` and `components/camera_ble/idf_component.yml`). The `esp_wifi` API used by `camera_wifi` is forwarded to the ESP32-C6. NimBLE runs on the ESP32-P4 without a local controller and exchanges HCI packets with the C6 controller over the SDIO link (VHCI); `camera_ble` switches the C6 controller on before starting NimBLE and off again when it releases BLE. C6 firmware older than ESP-Hosted 2.5.2 does not support this request and keeps its controller enabled; the first request then times out after about 5 seconds, and the firmware stops switching the controller for the rest of the run. The ESP32-C6 must run the ESP-Hosted co-processor firmware of the same release as the host component.
+- **C6 firmware update.** The `coprocessor_update` component builds the ESP-Hosted co-processor firmware for the ESP32-C6 from the `slave/` sources of the `esp_hosted` component (a nested `idf.py` build of a copy in the build directory, rebuilt only when the `esp_hosted` version changes) and embeds the image in the application. At boot the firmware asks the C6 for its version; if it differs from the embedded image, or the C6 does not answer, the image is sent over the ESP-Hosted link with the ESP-Hosted OTA API and the application restarts. A C6 that already runs ESP-Hosted 2.6 or newer is told to activate the image; older firmware switches on its own. Each image version is tried at most three times (**TrailCamHub PoC → Co-processor firmware** in `menuconfig`), so a C6 that cannot be updated this way does not cause a restart loop; it then has to be flashed over its UART (see the [ESP-Hosted documentation](https://github.com/espressif/esp-hosted-mcu)). The update can be disabled in the same menu, which also skips the C6 build.
+- **Ethernet uplink.** The `ethernet_uplink` component starts the EMAC with the IP101 PHY at boot and requests an address over DHCP; link and address changes are logged. Its route priority is higher than that of the Wi-Fi station, so the Ethernet interface stays the default route while the camera access point is joined; the camera remains reachable through the directly connected camera subnet. `CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF` keeps the DNS servers of the default interface, so the camera's DHCP server cannot replace them. The GPIOs and PHY address can be changed in `menuconfig` under **TrailCamHub PoC → Ethernet uplink**. Uploads themselves are not implemented yet, so a missing cable or failed Ethernet start is not fatal.
+- **SD card** in 4-bit mode on SDMMC slot 0. The SDMMC host is shared with the ESP-Hosted transport on slot 1 and must not be deinitialized while ESP-Hosted is running.
+- **PSRAM** in 16-line mode at the ESP-IDF default clock of 200 MHz.
+- **Chip revision v1.x.** ESP32-P4 chips of revision v3.x need different firmware images than v0.x/v1.x chips, and ESP-IDF 5.5 builds for v3.x by default. `sdkconfig.defaults.esp32p4` selects revisions v1.0 to v1.99 instead, matching the boards in use; the boot log shows the chip revision. A board with a v3.x chip needs a separate build without `CONFIG_ESP32P4_SELECTS_REV_LESS_V3`.
+
+Still to verify on hardware: ESP-Hosted transport and BLE scanning through the C6, camera Wi-Fi join and UDP session over `esp_wifi_remote`, simultaneous Wi-Fi and Ethernet operation, and the SD card in 4-bit mode next to the SDIO link.
+
 ### Alternative boards: LilyGO T-Dongle-S3 and T-Dongle-C5 (display and button)
 
 The **LilyGO T-Dongle-S3** is a USB stick with an ESP32-S3 (16 MB flash, no PSRAM), a 0.96" ST7735 display (160x80), a button on the back (GPIO0, the BOOT button) and a microSD slot. It has no uplink of its own; it is meant for testing the camera workflow on the bench. The firmware is built for the `esp32s3` target with `sdkconfig.defaults.tdongle-s3` on top of the common defaults, which enables `CONFIG_BOARD_TDONGLE_S3` and adapts the configuration:
@@ -141,6 +162,15 @@ idf.py menuconfig
 idf.py build flash monitor
 ```
 
+For the ESP32-P4-NANO, build in a separate directory so the ESP32-S3 build stays intact (the component manager downloads `esp_hosted` and `esp_wifi_remote` into `managed_components/` on the first build):
+
+```sh
+idf.py -B build-esp32p4 -D IDF_TARGET=esp32p4 \
+    -D SDKCONFIG=build-esp32p4/sdkconfig build flash monitor
+```
+
+The VS Code task **ESP-IDF: Build ESP32-P4-NANO firmware** runs the same build.
+
 For the T-Dongles, add the board defaults (the VS Code tasks **ESP-IDF: Build T-Dongle-S3 firmware** and **ESP-IDF: Build T-Dongle-C5 firmware** run the same builds):
 
 ```sh
@@ -163,11 +193,13 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 
 | Component | Responsibility |
 |---|---|
-| `main` | `app_main`: initializes storage and radios and wires the components together |
+| `main` | `app_main`: initializes storage, the network stack and the Ethernet uplink, and wires the components together |
 | `components/camera_ble` | BLE scan and connection, GATT profile check, Wi-Fi-enable command, credential response |
 | `components/camera_wifi` | Wi-Fi station for the camera access point; runs a session callback after each connection |
 | `components/camera_link` | Camera session over UDP: discovery, PRE_LOGIN, PPPP/ARTEMIS packets, ALIVE, heartbeats; media list, thumbnails, photo and video download |
 | `components/sd_storage` | microSD card mount |
+| `components/ethernet_uplink` | Ethernet uplink with DHCP (ESP32-P4-NANO only) |
+| `components/coprocessor_update` | Builds, embeds and installs the ESP32-C6 co-processor firmware (ESP32-P4-NANO only) |
 | `components/dongle_ui` | Status display and search button (T-Dongle-S3 and T-Dongle-C5 only) |
 | `components/web_ui` | Access point and web UI: status, search/stop, file browser and download, live log |
 | `components/sd_log` | Copy of the log output in text files on the SD card |
@@ -247,7 +279,7 @@ In `menuconfig`, open **TrailCamHub PoC**. **Wi-Fi enable payload (hex)** defaul
 
 **Media download → Download photos to the SD card** (off by default) downloads, after the thumbnails, every photo of the media list that the catalog does not mark as downloaded yet: cmdId 1285 requests the file, which streams back on bulk subtype 0x03 and is written to `/sdcard/<camera-id>/media/<dir>_<num>.<ext>` while it arrives (`BulkStream` on top of `FrameReorder`, with a reorder window of 32 frames in PSRAM or 8 without, so a photo is never held in RAM). The data goes to a `.part` file that is renamed when complete; the extension is taken from the content (JPEG, MP4/MOV, AVI, otherwise `bin`). A file without data for 20 seconds is dropped and tried again in the next session; a failed SD write stops the downloads. `camera_protocol_set_progress_callback()` reports the progress, for example to a display. Videos are not offered by cmdId 1285: the camera acknowledges the request but sends no data. **Download videos** (off by default, needs PSRAM) fetches them like the TrailCam Go app does, by playback (cmdId 769), and stores the streams as `<dir>_<num>.h264` (plays in VLC) and `<dir>_<num>.aac`; `ffmpeg -framerate 25 -i 100_2.h264 -i 100_2.aac -c copy 100_2.mp4` makes an MP4 without re-encoding (25 frames per second on the camera tried so far). Protocol, implementation and what to look for in the log are described in [docs/video-download.md](docs/video-download.md); one video has been received completely on a camera so far (about 19 times slower than playback, see the notes there), longer downloads are not yet verified.
 
-The **Firmware Package** GitHub Actions workflow builds the firmware for every board and publishes a `trailcamhub-<board>` artifact (`esp32s3`, `tdongle-s3`, `tdongle-c5`) containing a merged flash image, the individual firmware images, checksums, and deployment instructions. The default CI build uses the development profile, includes the `BT_KEY_ON` Wi-Fi-enable payload, and sends it after GATT discovery. The workflow also builds the release profile and writes a size report to the run summary: total image size, free space in the application partition, and memory use per component. On pull requests it adds a size comparison against the target branch and warns when less than 10 % of the application partition remains free. Separate jobs run the host unit tests and check C/C++ formatting with `clang-format` 23 against the repository's `.clang-format`; run `git ls-files '*.cpp' '*.h' '*.hpp' | xargs clang-format -i` before committing.
+The **Firmware Package** GitHub Actions workflow builds the firmware for every board and publishes a `trailcamhub-<board>` artifact (`esp32s3`, `esp32p4`, `tdongle-s3`, `tdongle-c5`) containing a merged flash image, the individual firmware images, checksums, and deployment instructions. The default CI build uses the development profile, includes the `BT_KEY_ON` Wi-Fi-enable payload, and sends it after GATT discovery. The workflow also builds the release profile and writes a size report to the run summary: total image size, free space in the application partition, and memory use per component. On pull requests it adds a size comparison against the target branch and warns when less than 10 % of the application partition remains free. Separate jobs run the host unit tests and check C/C++ formatting with `clang-format` 23 against the repository's `.clang-format`; run `git ls-files '*.cpp' '*.h' '*.hpp' | xargs clang-format -i` before committing.
 
 ### Browser Installer and Serial Console
 

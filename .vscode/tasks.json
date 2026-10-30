@@ -33,6 +33,20 @@
       "group": "build"
     },
     {
+      "label": "ESP-IDF: Build ESP32-P4-NANO firmware",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "source \"$IDF_PATH/export.sh\" >/dev/null && idf.py -B build-esp32p4 -D IDF_TARGET=esp32p4 -D SDKCONFIG=build-esp32p4/sdkconfig build"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
       "label": "ESP-IDF: Build T-Dongle-S3 firmware",
       "type": "shell",
       "command": "bash",

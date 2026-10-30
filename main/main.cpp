@@ -1,9 +1,11 @@
 /*
  * This module starts the log copy on the SD card, initializes diagnostics,
- * persistent storage, the SD card and the network stack, starts the web UI
- * and the dongle display where enabled, then hands over to the session
- * controller, which runs the camera workflow. The BLE stack is started by the
- * camera BLE module when it is needed.
+ * persistent storage, the SD card and the network stack (with the Ethernet
+ * uplink on boards that have one), brings the firmware of a Wi-Fi/BLE
+ * co-processor up to date, starts the web UI and the dongle display where
+ * enabled, then hands over to the session controller, which runs the camera
+ * workflow. The BLE stack is started by the camera BLE module when it is
+ * needed.
  */
 
 #include "esp_err.h"
@@ -14,7 +16,9 @@
 #include "sdkconfig.h"
 
 #include "camera_protocol.h"
+#include "coprocessor_update.h"
 #include "dongle_ui.h"
+#include "ethernet_uplink.h"
 #include "sd_card.h"
 #include "sd_log.h"
 #include "session_controller.h"
@@ -138,6 +142,23 @@ extern "C" void app_main(void)
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+#if CONFIG_COPROCESSOR_UPDATE_ENABLE
+    // Restarts the application after an update; Wi-Fi and BLE may not work
+    // with mismatched C6 firmware, but the rest of the firmware does.
+    error = coprocessor_update_run();
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Continuing with the current C6 firmware");
+    }
+#endif
+
+#if CONFIG_ETH_UPLINK_ENABLE
+    // Uploads are not implemented yet, so a missing uplink is not fatal.
+    error = ethernet_uplink_start();
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Continuing without Ethernet uplink");
+    }
+#endif
 
     ESP_ERROR_CHECK(session_controller_init());
 #if CONFIG_WEB_UI_ENABLE

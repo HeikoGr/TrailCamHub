@@ -8,8 +8,8 @@
 
 /*
  * Mounts the FAT file system of the SD card at SD_CARD_MOUNT_POINT using the
- * SDMMC peripheral in 1-bit mode or, with CONFIG_SD_CARD_SPI_MODE, on the
- * SPI2 bus.
+ * SDMMC peripheral (1-bit on the ESP32-S3 boards, 4-bit on the ESP32-P4-NANO)
+ * or, with CONFIG_SD_CARD_SPI_MODE, on the SPI2 bus (T-Dongle-C5).
  * The card is never formatted automatically.
  */
 esp_err_t sd_card_mount(void);
