@@ -59,6 +59,12 @@
 #else
 #define CAMERA_DOWNLOAD_REORDER_FRAMES 8
 #endif
+// Playback frames are acknowledged together: one ACK (it lists the last 16
+// sequences) per this many frames, or once no frame came for the delay.
+// One ACK per frame, at a few hundred frames per second, ran the Wi-Fi TX
+// buffers out (sends failed with ENOMEM).
+#define CAMERA_VIDEO_ACK_EVERY 4
+#define CAMERA_VIDEO_ACK_DELAY_US (10 * 1000LL)
 // A thumbnail with no new frame for this long is requested again.
 #define CAMERA_THUMBNAIL_STALL_US (3 * 1000 * 1000LL)
 // Log a download's progress every this many bytes.
@@ -372,6 +378,8 @@ static uint32_t s_video_heartbeats;
 // behind) and how many of them were logged.
 static uint32_t s_video_far_behind;
 static uint32_t s_video_far_logged;
+// Playback frames acknowledged in s_bulk_window but not yet sent in an ACK.
+static unsigned s_video_ack_pending;
 static int64_t s_video_write_us;
 static int64_t s_video_write_max_us;
 static bool s_video_complete_logged;
@@ -616,6 +624,7 @@ static bool start_video_download(const camera::artemis::CatalogEntry &e)
     s_video_heartbeats = 0;
     s_video_far_behind = 0;
     s_video_far_logged = 0;
+    s_video_ack_pending = 0;
     s_video_write_us = 0;
     s_video_write_max_us = 0;
     s_video_complete_logged = false;
@@ -1024,6 +1033,19 @@ static bool write_playback_record(uint32_t version, uint8_t *payload,
     return true;
 }
 
+// Sends one ACK for the playback frames acknowledged since the last one.
+static void send_video_ack(int socket_fd,
+                           const struct sockaddr_in *camera_address)
+{
+    s_video_ack_pending = 0;
+    camera::ArtemisBulkAckRequest window_ack;
+    if (window_ack.build(0x02, s_bulk_window, s_bulk_window_count) &&
+        send_udp_request(socket_fd, camera_address, "BULK ACK", window_ack) !=
+            ESP_OK) {
+        s_video_ack_failures++;
+    }
+}
+
 // Handles one frame of the playback stream (bulk subtype 0x02).
 static void handle_playback_frame(int socket_fd,
                                   const struct sockaddr_in *camera_address,
@@ -1064,12 +1086,8 @@ static void handle_playback_frame(int socket_fd,
         ack);
     if (ack) {
         bulk_window_push(seq);
-        camera::ArtemisBulkAckRequest window_ack;
-        if (window_ack.build(0x02, s_bulk_window, s_bulk_window_count)) {
-            if (send_udp_request(socket_fd, camera_address, "BULK ACK",
-                                 window_ack) != ESP_OK) {
-                s_video_ack_failures++;
-            }
+        if (++s_video_ack_pending >= CAMERA_VIDEO_ACK_EVERY) {
+            send_video_ack(socket_fd, camera_address);
         }
         s_video_last_data_us = esp_timer_get_time();
         s_download_progress_us = s_video_last_data_us;
@@ -1560,6 +1578,10 @@ static esp_err_t run_artemis_session(int socket_fd,
                 }
             }
         }
+        // Send the pending playback ACK once no frame follows shortly.
+        if (s_video_ack_pending > 0 && timeout_us > CAMERA_VIDEO_ACK_DELAY_US) {
+            timeout_us = CAMERA_VIDEO_ACK_DELAY_US;
+        }
         esp_err_t timeout_error =
             set_receive_timeout(socket_fd, timeout_us, "ARTEMIS");
         if (timeout_error != ESP_OK) {
@@ -1574,6 +1596,9 @@ static esp_err_t run_artemis_session(int socket_fd,
             socket_fd, packet, sizeof(packet), &source, "ARTEMIS");
         if (received < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (s_video_ack_pending > 0) {
+                    send_video_ack(socket_fd, camera_address);
+                }
                 continue;
             }
             ESP_LOGE(TAG, "ARTEMIS packet receive failed: errno %d", errno);
