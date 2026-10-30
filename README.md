@@ -195,6 +195,10 @@ The manual merged image and its SHA-256 checksum are also available on the insta
 
 The installer does not configure the camera name or Wi-Fi-enable payload. It installs the default CI build, which sends `BT_KEY_ON` to request Wi-Fi activation after BLE discovery. Do not install firmware unless you trust its source, and use the installer only with a board you are authorized to modify.
 
+### Phone App (Telegram Mini App)
+
+The phone UI lives in [`app/`](app/README.md): a React web app that runs as a Telegram Mini App and is published on the same GitHub Pages site under **https://thomaspohl.github.io/TrailCamHub/app/**. It shows camera status and thumbnails and lets users request video downloads. Until the backend exists it runs in demo mode with sample data. The **App** workflow lints, tests and builds it on pull requests.
+
 ## Reliability and Security
 
 - Mark files as locally available only after a successful download and a reasonable integrity check.

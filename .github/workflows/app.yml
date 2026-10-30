@@ -1,0 +1,81 @@
+name: App
+
+# Checks the Telegram Mini App in app/. Publishing happens in the
+# deploy-installer job of firmware-package.yml, because the repository has a
+# single GitHub Pages site that holds both the installer and the app.
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/app.yml"
+  push:
+    branches:
+      - main
+      - feature/*
+    paths:
+      - "app/**"
+      - ".github/workflows/app.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  check:
+    name: Lint, test and build app
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json ]]; then
+            npm ci
+          else
+            echo "::warning::app/package-lock.json is missing; resolving dependencies with npm install"
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and component tests
+        run: npm test
+
+      - name: Type check and build
+        run: npm run build
+        env:
+          VITE_APP_VERSION: ${{ github.sha }}
+
+      - name: Upload lockfile
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: app-package-lock
+          path: app/package-lock.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload build
+        uses: actions/upload-artifact@v5
+        with:
+          name: trailcamhub-app
+          path: app/dist
+          if-no-files-found: error
+          retention-days: 7
