@@ -55,6 +55,8 @@
 #else
 #define CAMERA_DOWNLOAD_REORDER_FRAMES 8
 #endif
+// A thumbnail with no new frame for this long is requested again.
+#define CAMERA_THUMBNAIL_STALL_US (3 * 1000 * 1000LL)
 // Log a download's progress every this many bytes.
 #define CAMERA_DOWNLOAD_LOG_INTERVAL_BYTES (256u * 1024u)
 
@@ -325,6 +327,14 @@ static uint8_t s_bulk_subtype;
 static uint16_t s_bulk_window[16];
 static size_t s_bulk_window_count;
 static bool s_bulk_active;
+// Sequence that follows the last completed bulk record, so that a resent
+// header frame of that record is not taken for the start of the next one.
+static uint16_t s_bulk_next_seq;
+static bool s_bulk_next_seq_valid;
+// Last frame of the record being received, and how often the current
+// thumbnail was requested again after it stalled.
+static int64_t s_bulk_last_frame_us;
+static unsigned s_thumb_retries;
 
 // Media download state, reset at the start of each session. A download is
 // active from its request (cmdId 1285) until its record is complete or it is
@@ -888,6 +898,31 @@ static void handle_download_frame(int socket_fd,
 }
 
 // Aborts the current download if no data arrived for the stall timeout.
+// A thumbnail record that stops arriving: the heartbeat is paused during a
+// bulk transfer, so without this the camera would end the session. Request
+// the thumbnail again, or skip it after a second stall.
+static void check_thumbnail_stall(int64_t now_us)
+{
+    if (!s_bulk_active || s_bulk_subtype != 0x04 ||
+        now_us - s_bulk_last_frame_us < CAMERA_THUMBNAIL_STALL_US) {
+        return;
+    }
+    ESP_LOGW(TAG, "Thumbnail stalled at %u of %u frames; %s",
+             (unsigned)s_bulk.received_frames(),
+             (unsigned)s_bulk.total_frames(),
+             s_thumb_retries == 0 ? "requesting it again" : "skipping it");
+    s_bulk.reset();
+    s_bulk_window_count = 0;
+    s_bulk_active = false;
+    if (s_thumb_retries == 0) {
+        s_thumb_retries = 1;
+    } else {
+        s_thumb_retries = 0;
+        ++s_thumb_index;
+    }
+    request_current_thumbnail();
+}
+
 static void check_download_stall(int64_t now_us)
 {
     if (s_video_drain_until_us != 0 && !s_download_active &&
@@ -1121,12 +1156,30 @@ static void handle_bulk_frame(int socket_fd,
                      (unsigned)subtype, (unsigned)seq, (unsigned)payload_len);
             return;
         }
+        // The camera may resend the header frame of a record that is already
+        // complete; a record starting before the end of the last one is such
+        // a repeat, not the next record.
+        if (s_bulk_next_seq_valid && subtype == s_bulk_subtype &&
+            static_cast<int16_t>(seq - s_bulk_next_seq) < 0) {
+            camera::ArtemisBulkAckRequest stray_ack;
+            if (stray_ack.build(subtype, &seq, 1)) {
+                send_udp_request(socket_fd, camera_address, "BULK ACK (stray)",
+                                 stray_ack);
+            }
+            ESP_LOGI(TAG,
+                     "BULK subtype 0x%02x seq %u: repeated header of a "
+                     "finished record ignored (next record from seq %u)",
+                     (unsigned)subtype, (unsigned)seq,
+                     (unsigned)s_bulk_next_seq);
+            return;
+        }
         s_bulk.reset();
         s_bulk_window_count = 0;
         s_bulk_subtype = subtype;
         s_bulk_active = true;
     }
 
+    s_bulk_last_frame_us = esp_timer_get_time();
     const bool was_header = s_bulk.header_ready();
     const size_t before = s_bulk.received_frames();
     const BulkReassembler::Status status =
@@ -1175,6 +1228,9 @@ static void handle_bulk_frame(int socket_fd,
         return;
     }
     if (status == BulkReassembler::Status::complete) {
+        s_bulk_next_seq =
+            static_cast<uint16_t>(s_bulk.base_seq() + s_bulk.total_frames());
+        s_bulk_next_seq_valid = true;
         MediaRecordHeader header;
         size_t jpeg_offset = 0;
         size_t jpeg_size = 0;
@@ -1222,6 +1278,7 @@ static void handle_bulk_frame(int socket_fd,
 
         if (subtype == 0x04) {
             ++s_thumb_index;
+            s_thumb_retries = 0;
             request_current_thumbnail();
         }
     }
@@ -1418,6 +1475,8 @@ static esp_err_t run_artemis_session(int socket_fd,
     s_bulk_subtype = 0;
     s_bulk_window_count = 0;
     s_bulk_active = false;
+    s_bulk_next_seq_valid = false;
+    s_thumb_retries = 0;
     s_download_queue.clear();
     s_download_index = 0;
     s_download_active = false;
@@ -1438,6 +1497,7 @@ static esp_err_t run_artemis_session(int socket_fd,
         }
         int64_t now_us = esp_timer_get_time();
         check_download_stall(now_us);
+        check_thumbnail_stall(now_us);
         // A video download may use its own interval: the camera streamed about
         // two video frames per heartbeat, as if it were held back by them.
         heartbeat_interval_us =
