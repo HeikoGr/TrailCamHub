@@ -229,7 +229,7 @@ jobs:
 
           # Assemble the published site: page assets + all stored builds.
           mkdir -p site
-          cp web/index.html web/styles.css web/serial-console.js web/installer.js site/
+          cp web/*.html web/*.css web/*.js site/
           cp store/versions.json site/
           cp -r store/builds site/builds
 

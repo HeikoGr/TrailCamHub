@@ -7,6 +7,7 @@ let port;
 let reader;
 let reading = false;
 let lineBuffer = "";
+const encoder = new TextEncoder();
 
 function appendOutput(text) {
   output.textContent += text;
@@ -43,6 +44,7 @@ async function disconnect() {
   connectButton.disabled = !("serial" in navigator);
   disconnectButton.disabled = true;
   status.textContent = "Not connected";
+  window.dispatchEvent(new CustomEvent("serial-disconnected"));
 }
 
 async function connect() {
@@ -55,6 +57,7 @@ async function connect() {
     connectButton.disabled = true;
     disconnectButton.disabled = false;
     status.textContent = "Connected at 115200 baud";
+    window.dispatchEvent(new CustomEvent("serial-connected"));
 
     const decoder = new TextDecoder();
     while (port.readable && reading) {
@@ -104,6 +107,25 @@ if (!("serial" in navigator)) {
   connectButton.disabled = true;
   status.textContent = "Web Serial is not supported by this browser.";
 }
+
+// Sends one command line to the device (used by the device setup panel).
+async function sendLine(line) {
+  if (!port || !port.writable) {
+    throw new Error("Serial port is not connected");
+  }
+  const writer = port.writable.getWriter();
+  try {
+    await writer.write(encoder.encode(`${line}\n`));
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+window.trailcamSerial = {
+  connect,
+  sendLine,
+  isConnected: () => Boolean(port && reading),
+};
 
 connectButton.addEventListener("click", connect);
 disconnectButton.addEventListener("click", handleDisconnect);
