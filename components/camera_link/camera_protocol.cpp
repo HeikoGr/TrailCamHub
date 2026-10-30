@@ -49,9 +49,13 @@
 // Frames buffered ahead of a missing one while streaming a download (1 KB
 // each); later frames are not acknowledged, so the camera resends them.
 // The window is one block of up to 1472 bytes per frame, in PSRAM if there is
-// one; without, internal RAM is too short for more.
+// one; without, internal RAM is too short for more. During a video playback
+// the camera sends about 120 frames ahead of the first unacknowledged one, so
+// the window must be larger than that: with 32 frames, most of them were
+// dropped and sent again, which made the download about 20 times slower than
+// playback (256 frames take about 377 KB of PSRAM per stream).
 #if CONFIG_SPIRAM
-#define CAMERA_DOWNLOAD_REORDER_FRAMES 32
+#define CAMERA_DOWNLOAD_REORDER_FRAMES 256
 #else
 #define CAMERA_DOWNLOAD_REORDER_FRAMES 8
 #endif
