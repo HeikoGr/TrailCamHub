@@ -72,7 +72,11 @@ jobs:
           ../.github/scripts/run-annotated.sh 'Validate bootstrap' sam validate --lint --region eu-central-1 --template bootstrap/github-deploy.yaml
 
       - name: Build
-        run: ../.github/scripts/run-annotated.sh 'SAM build' sam build
+        # SAM bundles with esbuild from the PATH (its own npm install skips
+        # dev dependencies), so expose the project's copy.
+        run: |
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          ../.github/scripts/run-annotated.sh 'SAM build' sam build
 
   deploy:
     name: Deploy backend to AWS
@@ -124,6 +128,7 @@ jobs:
           ALLOWED_ORIGIN: https://${{ github.repository_owner }}.github.io
         run: |
           set -euo pipefail
+          export PATH="$PWD/node_modules/.bin:$PATH"
           sam build
           sam deploy \
             --region "$AWS_REGION" \
