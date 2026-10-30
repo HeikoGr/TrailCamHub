@@ -115,10 +115,7 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
     const std::string thumbs = base + "/thumb";
     if (!ensure_dir(thumbs))
         return false;
-    char name[48];
-    snprintf(name, sizeof(name), "/%lld_%lld.jpg", (long long)dir,
-             (long long)num);
-    const std::string path = thumbs + name;
+    const std::string path = thumbnail_path(camera_id, dir, num);
     if (!write_file(path, jpeg, size))
         return false;
     // Set the file's timestamps to the recording time so the thumbnail dates
@@ -133,6 +130,32 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
         }
     }
     return true;
+}
+
+std::string thumbnail_path(const std::string &camera_id, std::int64_t dir,
+                           std::int64_t num)
+{
+    char name[48];
+    snprintf(name, sizeof(name), "/thumb/%lld_%lld.jpg", (long long)dir,
+             (long long)num);
+    return camera_dir(camera_id) + name;
+}
+
+bool save_last_camera(const camera::artemis::DeviceInfo &info)
+{
+    const std::string text = camera::artemis::serialize_device_info(info);
+    return write_file(std::string(SD_CARD_MOUNT_POINT) + "/last_camera.json",
+                      text.data(), text.size());
+}
+
+bool load_last_camera(camera::artemis::DeviceInfo &out)
+{
+    std::string text;
+    if (!read_file(std::string(SD_CARD_MOUNT_POINT) + "/last_camera.json",
+                   text)) {
+        return false;
+    }
+    return camera::artemis::parse_device_info(text, out);
 }
 
 }  // namespace camera::store

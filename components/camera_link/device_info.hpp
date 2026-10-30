@@ -25,4 +25,8 @@ struct DeviceInfo {
 // is accepted as either a JSON string or a number.
 bool parse_device_info(const std::string &json, DeviceInfo &out);
 
+// Writes the fields back in the 512 response format, so a stored copy can be
+// read with parse_device_info(). Unknown numbers (-1) are left out.
+std::string serialize_device_info(const DeviceInfo &info);
+
 }  // namespace camera::artemis

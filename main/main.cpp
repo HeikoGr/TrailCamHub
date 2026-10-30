@@ -1,7 +1,9 @@
 /*
  * This module initializes diagnostics, persistent storage and the SD card,
- * then hands over to the session controller, which runs the camera workflow.
- * The BLE stack is started by the camera BLE module when it is needed.
+ * then starts the session controller, which runs a camera/uplink cycle when
+ * one is requested, and the serial console, which accepts those requests and
+ * the hub settings. The BLE stack is started by the camera BLE module when it
+ * is needed.
  */
 
 #include "esp_err.h"
@@ -9,6 +11,7 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#include "hub_console.h"
 #include "sd_card.h"
 #include "session_controller.h"
 #include "system_diagnostics.h"
@@ -42,6 +45,12 @@ extern "C" void app_main(void)
     error = session_controller_start();
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "Could not start the session controller: %s",
+                 esp_err_to_name(error));
+    }
+
+    error = hub_console_start();
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "Could not start the serial console: %s",
                  esp_err_to_name(error));
     }
 }
