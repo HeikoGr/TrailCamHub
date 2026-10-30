@@ -46,20 +46,20 @@ jobs:
             npm ci
           else
             echo "::warning::backend/package-lock.json is missing; resolving dependencies with npm install"
-            npm install --no-audit --no-fund
+            ../.github/scripts/run-annotated.sh "npm install" npm install --no-audit --no-fund
           fi
 
       - name: Check formatting
-        run: npm run format:check
+        run: ../.github/scripts/run-annotated.sh Formatting npm run format:check
 
       - name: Lint
-        run: npm run lint
+        run: ../.github/scripts/run-annotated.sh Lint npm run lint
 
       - name: Type check
-        run: npm run typecheck
+        run: ../.github/scripts/run-annotated.sh 'Type check' npm run typecheck
 
       - name: Unit tests
-        run: npm test
+        run: ../.github/scripts/run-annotated.sh Tests npm test
 
       - name: Set up AWS SAM CLI
         uses: aws-actions/setup-sam@v2
@@ -68,11 +68,11 @@ jobs:
 
       - name: Validate templates
         run: |
-          sam validate --lint --region eu-central-1
-          sam validate --lint --region eu-central-1 --template bootstrap/github-deploy.yaml
+          ../.github/scripts/run-annotated.sh 'Validate template.yaml' sam validate --lint --region eu-central-1
+          ../.github/scripts/run-annotated.sh 'Validate bootstrap' sam validate --lint --region eu-central-1 --template bootstrap/github-deploy.yaml
 
       - name: Build
-        run: sam build
+        run: ../.github/scripts/run-annotated.sh 'SAM build' sam build
 
   deploy:
     name: Deploy backend to AWS
