@@ -1,0 +1,19 @@
+# AWS SAM CLI configuration. Account-specific values (artifact bucket, roles)
+# are passed on the command line by CI; see README.md.
+version = 0.1
+
+[default.global.parameters]
+stack_name = "trailcamhub"
+
+[default.build.parameters]
+cached = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+fail_on_empty_changeset = false
+region = "eu-central-1"
+s3_prefix = "trailcamhub"

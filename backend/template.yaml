@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  TrailCamHub backend: one Lambda function behind a Function URL, a DynamoDB
+  table for cameras, media and commands, and an S3 bucket for thumbnails.
+
+Parameters:
+  AllowedOrigin:
+    Type: String
+    Default: https://thomaspohl.github.io
+    Description: Browser origin of the Telegram Mini App (CORS).
+  TelegramBotTokenParameter:
+    Type: String
+    Default: /trailcamhub/telegram-bot-token
+    AllowedPattern: '^/[A-Za-z0-9_./-]+$'
+    Description: >-
+      Name of the SSM parameter (SecureString) holding the Telegram bot token.
+      Create it once by hand; it never appears in the template or the repository.
+  SleepIntervalSeconds:
+    Type: Number
+    Default: 1800
+    MinValue: 60
+    Description: Sleep interval the hub is told to use between check-ins.
+  ThumbnailRetentionDays:
+    Type: Number
+    Default: 365
+    MinValue: 1
+    Description: Thumbnails older than this are deleted from S3.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 15
+    Tracing: Disabled
+
+Resources:
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      # Provisioned capacity stays within the DynamoDB always-free tier
+      # (on-demand tables are not covered by it).
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      SSESpecification:
+        SSEEnabled: true
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-thumbnails
+            Status: Enabled
+            Prefix: thumb/
+            ExpirationInDays: !Ref ThumbnailRetentionDays
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      # Presigned URLs are used from the Mini App (GET) and the hub (PUT).
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET]
+            AllowedOrigins: [!Ref AllowedOrigin]
+            MaxAge: 3600
+
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucket
+      PolicyDocument:
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt MediaBucket.Arn
+              - !Sub '${MediaBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Format: esm
+        Target: es2022
+        Minify: true
+        Sourcemap: true
+        EntryPoints: [src/handler.ts]
+        # The Node.js 22 runtime ships the AWS SDK v3.
+        External: ['@aws-sdk/*']
+        OutExtension: ['.js=.mjs']
+    Properties:
+      CodeUri: .
+      Handler: handler.handler
+      Description: TrailCamHub API (app + device endpoints)
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+          MEDIA_BUCKET: !Ref MediaBucket
+          TELEGRAM_BOT_TOKEN_PARAM: !Ref TelegramBotTokenParameter
+          SLEEP_INTERVAL_S: !Ref SleepIntervalSeconds
+          NODE_OPTIONS: --enable-source-maps
+      LoggingConfig:
+        LogGroup: !Ref ApiLogGroup
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+        - Statement:
+            - Effect: Allow
+              Action: [s3:GetObject, s3:PutObject]
+              Resource: !Sub '${MediaBucket.Arn}/thumb/*'
+            - Effect: Allow
+              Action: s3:ListBucket
+              Resource: !GetAtt MediaBucket.Arn
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TelegramBotTokenParameter}'
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins: [!Ref AllowedOrigin]
+          AllowMethods: [GET, POST]
+          AllowHeaders: [authorization, content-type]
+          MaxAge: 3600
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 14
+
+Outputs:
+  ApiUrl:
+    Description: Base URL of the API (set as repository variable TRAILCAMHUB_API_BASE_URL)
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  TableName:
+    Value: !Ref Table
+  MediaBucketName:
+    Value: !Ref MediaBucket
