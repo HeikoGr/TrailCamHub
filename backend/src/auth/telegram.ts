@@ -49,9 +49,12 @@ export function validateInitData(
   }
 
   const authDate = Number(params.get('auth_date'));
-  if (!Number.isFinite(authDate) || authDate <= 0)
+  if (!Number.isFinite(authDate) || authDate <= 0) {
     return { ok: false, reason: 'missing auth_date' };
-  if (nowS - authDate > maxAgeS) return { ok: false, reason: 'expired' };
+  }
+  if (nowS - authDate > maxAgeS) {
+    return { ok: false, reason: 'expired' };
+  }
 
   let user: { id?: unknown; first_name?: unknown };
   try {
