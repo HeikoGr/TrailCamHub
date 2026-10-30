@@ -47,6 +47,10 @@ class PlaybackStream
     {
         return reorder_.next_frame();
     }
+    std::uint16_t expected_seq() const
+    {
+        return reorder_.expected_seq();
+    }
     std::uint64_t records() const
     {
         return records_;

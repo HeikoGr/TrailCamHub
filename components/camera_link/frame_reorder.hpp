@@ -70,6 +70,11 @@ class FrameReorder
     {
         return stats_;
     }
+    // Sequence of the frame expected next.
+    std::uint16_t expected_seq() const
+    {
+        return static_cast<std::uint16_t>(base_seq_ + next_frame_);
+    }
     // Index of the frame expected next (= number of frames passed on).
     std::uint64_t next_frame() const
     {

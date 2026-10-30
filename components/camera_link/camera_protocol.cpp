@@ -354,6 +354,10 @@ static int64_t s_video_drain_until_us;
 static bool s_video_write_failed;
 static uint32_t s_video_ack_failures;
 static uint32_t s_video_heartbeats;
+// Frames far from the expected sequence (more than the reorder window ahead or
+// behind) and how many of them were logged.
+static uint32_t s_video_far_behind;
+static uint32_t s_video_far_logged;
 static int64_t s_video_write_us;
 static int64_t s_video_write_max_us;
 static bool s_video_complete_logged;
@@ -596,6 +600,8 @@ static bool start_video_download(const camera::artemis::CatalogEntry &e)
     s_video_write_failed = false;
     s_video_ack_failures = 0;
     s_video_heartbeats = 0;
+    s_video_far_behind = 0;
+    s_video_far_logged = 0;
     s_video_write_us = 0;
     s_video_write_max_us = 0;
     s_video_complete_logged = false;
@@ -690,6 +696,36 @@ static void start_downloads()
     request_current_download();
 }
 
+// Logs where the time of the current video download went: gaps and repeats
+// mean lost packets, long SD writes block the receive loop, low internal heap
+// makes sends fail. Also logged with the progress and when the session ends
+// during a video, so a stopped download still shows the counts.
+static void log_video_transfer()
+{
+    const camera::artemis::FrameReorder::Stats &frames =
+        s_playback.reorder_stats();
+    ESP_LOGI(TAG,
+             "Video transfer: %u frames out of order, %u repeated by the "
+             "camera, %u beyond the window, %u ACK send failures, SD "
+             "writes %lld ms (longest %lld ms), internal heap %u B free "
+             "(min %u B), %u heartbeats (%u.%u video frames each), %u far "
+             "behind",
+             (unsigned)frames.buffered, (unsigned)frames.duplicates,
+             (unsigned)frames.ahead, (unsigned)s_video_ack_failures,
+             (long long)(s_video_write_us / 1000),
+             (long long)(s_video_write_max_us / 1000),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)s_video_heartbeats,
+             (unsigned)(s_video_heartbeats > 0
+                            ? s_video_frames / s_video_heartbeats
+                            : 0),
+             (unsigned)(s_video_heartbeats > 0
+                            ? s_video_frames * 10 / s_video_heartbeats % 10
+                            : 0),
+             (unsigned)s_video_far_behind);
+}
+
 // Ends the current download: on success the file gets its final name and the
 // catalog records it; otherwise the partial file is removed and the item is
 // tried again in a later session. Then the next item is requested, unless
@@ -715,28 +751,7 @@ static void finish_current_download(bool stored, bool stop_all)
                  (unsigned)s_video_other_records,
                  (unsigned long long)s_media_file.size(),
                  (unsigned long long)s_audio_file.size());
-        // Where the time went: gaps and repeats mean lost packets, long SD
-        // writes block the receive loop, low internal heap makes sends fail.
-        const camera::artemis::FrameReorder::Stats &frames =
-            s_playback.reorder_stats();
-        ESP_LOGI(TAG,
-                 "Video transfer: %u frames out of order, %u repeated by the "
-                 "camera, %u beyond the window, %u ACK send failures, SD "
-                 "writes %lld ms (longest %lld ms), internal heap %u B free "
-                 "(min %u B), %u heartbeats (%u.%u video frames each)",
-                 (unsigned)frames.buffered, (unsigned)frames.duplicates,
-                 (unsigned)frames.ahead, (unsigned)s_video_ack_failures,
-                 (long long)(s_video_write_us / 1000),
-                 (long long)(s_video_write_max_us / 1000),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-                 (unsigned)s_video_heartbeats,
-                 (unsigned)(s_video_heartbeats > 0
-                                ? s_video_frames / s_video_heartbeats
-                                : 0),
-                 (unsigned)(s_video_heartbeats > 0
-                                ? s_video_frames * 10 / s_video_heartbeats % 10
-                                : 0));
+        log_video_transfer();
         stored = stored && s_video_frames > 0;
         if (stored && s_audio_file.size() > 0) {
             if (!s_audio_file.finish(e.media_time)) {
@@ -965,6 +980,7 @@ static bool write_playback_record(uint32_t version, uint8_t *payload,
         ESP_LOGI(TAG, "Video: %u of %lld frames, %llu KB",
                  (unsigned)s_video_frames, (long long)s_video_total_frames,
                  (unsigned long long)(s_media_file.size() / 1024));
+        log_video_transfer();
     }
     return true;
 }
@@ -976,6 +992,30 @@ static void handle_playback_frame(int socket_fd,
                                   size_t payload_len)
 {
     using camera::artemis::PlaybackStream;
+    // Frames beyond the reorder window: they show how far ahead of the first
+    // missing frame the camera sends (and so how large the window must be).
+    // Log the first ones and then a sample.
+    if (s_playback.started()) {
+        const uint16_t expected = s_playback.expected_seq();
+        const int16_t delta = static_cast<int16_t>(seq - expected);
+        const int window = CAMERA_DOWNLOAD_REORDER_FRAMES;
+        if (delta > window || delta < -window) {
+            if (delta < 0) {
+                s_video_far_behind++;
+            }
+            if (s_video_far_logged < 40 || s_video_far_logged % 500 == 0) {
+                ESP_LOGI(TAG,
+                         "Playback frame seq %u, expected %u (delta %d), %u "
+                         "bytes:",
+                         (unsigned)seq, (unsigned)expected, (int)delta,
+                         (unsigned)payload_len);
+                ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload,
+                                         payload_len < 16 ? payload_len : 16,
+                                         ESP_LOG_INFO);
+            }
+            s_video_far_logged++;
+        }
+    }
     bool ack = false;
     const PlaybackStream::Status status = s_playback.feed(
         seq, payload, payload_len,
@@ -1532,6 +1572,9 @@ wait_for_artemis_packets(int socket_fd,
 {
     const esp_err_t error =
         run_artemis_session(socket_fd, camera_address, discovery_started_us);
+    if (s_video_active) {
+        log_video_transfer();
+    }
     if (s_media_file.is_open()) {
         ESP_LOGW(TAG, "Session ended during a download; partial file removed");
         s_media_file.abort();
