@@ -164,7 +164,8 @@ bool collect(MediaFileWriter *file, const std::uint8_t *data, std::size_t size)
     return ok;
 }
 
-void writer_task(void *)
+// Started only with PSRAM (see sd_writer_start()).
+[[maybe_unused]] void writer_task(void *)
 {
     for (;;) {
         std::size_t size = 0;
