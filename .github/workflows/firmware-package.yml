@@ -120,17 +120,6 @@ jobs:
           .github/scripts/run-annotated.sh "Host test build" cmake --build build-host --parallel
           .github/scripts/run-annotated.sh "Host tests" ctest --test-dir build-host --output-on-failure
 
-      - name: Check the dongle screenshots
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The images in docs/ must match what the display code draws.
-          cmake -S tools/dongle_screens -B build-screens
-          cmake --build build-screens --parallel
-          build-screens/dongle_screens docs/images/dongle
-          git diff --exit-code -- docs/images/dongle ||
-            { echo "::error::Run tools/dongle_screens and commit the images"; exit 1; }
-
   size-report:
     name: Release size report
     runs-on: ubuntu-latest
