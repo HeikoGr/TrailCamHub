@@ -92,6 +92,10 @@ static void on_session_status(const session_status_t *status, void *context)
 #endif
 }
 
+#endif
+
+// Passes the media download progress to every front end that shows it; the
+// serial console exists on every board.
 static void on_media_progress(uint32_t done, uint32_t stored, uint32_t total)
 {
 #if CONFIG_BOARD_TDONGLE
@@ -104,8 +108,8 @@ static void on_media_progress(uint32_t done, uint32_t stored, uint32_t total)
         web_ui_set_media_progress(done, stored, total);
     }
 #endif
+    hub_console_set_media_progress(done, stored, total);
 }
-#endif
 
 #if CONFIG_BOARD_TDONGLE || CONFIG_WEB_UI_ENABLE
 static void on_search_request(void)
@@ -218,8 +222,8 @@ extern "C" void app_main(void)
         ESP_OK) {
         ESP_LOGW(TAG, "The display and web UI do not follow the session");
     }
-    camera_protocol_set_progress_callback(on_media_progress);
 #endif
+    camera_protocol_set_progress_callback(on_media_progress);
     error = session_controller_start();
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "Could not start the session controller: %s",
