@@ -150,6 +150,10 @@ Projects). Set `AWS_REGION` accordingly if it differs.
      --query 'Stacks[0].Outputs'
    ```
 
+   When `bootstrap/github-deploy.yaml` changes, run the same `deploy` command
+   again; GitHub Actions cannot update this stack itself. Outputs, access key and
+   repository settings stay the same.
+
 2. **Access key** for the deploy user (`DeployUserName` from the outputs):
 
    ```bash
