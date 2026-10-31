@@ -1,9 +1,9 @@
 /*
  * This module initializes diagnostics, persistent storage, the network stack
- * and the SD card, then starts the session controller, which runs a camera/uplink cycle when
- * one is requested, and the serial console, which accepts those requests and
- * the hub settings. The BLE stack is started by the camera BLE module when it
- * is needed.
+ * and the SD card, then starts the session controller, which runs a
+ * camera/uplink cycle when one is requested, and the serial console, which
+ * accepts those requests and the hub settings. The BLE stack is started by the
+ * camera BLE module when it is needed.
  */
 
 #include "esp_err.h"
