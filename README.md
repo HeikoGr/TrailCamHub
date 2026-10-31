@@ -128,6 +128,33 @@ With `CONFIG_WEB_UI_ENABLE` (**TrailCamHub PoC → Web UI** in `menuconfig`, off
 
 `sd_log` (enabled by default wherever the SD card is enabled, **TrailCamHub PoC → Log on the SD card**) copies every log line to `/sdcard/logs/log-NNNNN.txt`, so that a field test can be read afterwards without a serial console. The lines are collected from the first statement of `app_main` (the boot messages are kept in a 64 KB PSRAM buffer until the card is mounted; 8 KB of internal RAM without PSRAM) and written by a low-priority task about once per second; each write is synced to the card, so pulling the device loses at most the last second. A new file is started at every boot and when a file reaches 4 MB; the 50 newest files are kept. Lines that do not fit into the buffer, for example while the card is busy, are counted and noted in the file. Lines longer than 255 characters are cut.
 
+### Serial command console
+
+With `CONFIG_DEBUG_CONSOLE_ENABLE` (**TrailCamHub PoC → Serial console**, needs the USB-Serial-JTAG console; on in `sdkconfig.defaults.tdongle-c5`, off in the release profile) the `debug_console` component reads command lines from the native USB port, so that a test run can be driven from a computer without the button, the web UI or taking out the card:
+
+| Command | Effect |
+| --- | --- |
+| `search`, `stop` | Like a short and a long button press |
+| `status` | Workflow phase, download progress, uptime, free internal RAM and PSRAM, free space on the card |
+| `heap [blocks]` | Internal RAM by capability (DMA, RTC RAM, ...) and by region, and PSRAM: free, largest free block, minimum; `blocks` lists the blocks of the small DMA-capable heaps with the first bytes of each used one |
+| `ls [path]` | Directory listing: type, size, modification time, name |
+| `cat <path> [offset [length]]` | File contents as Base64 lines `@D <offset> <data>` between `@FILE <size>` and `@END <offset> <length> <crc32>` |
+| `rm [-r] <path>` | Deletes a file, or a directory tree with `-r` |
+| `sdbench [total_kb [chunk_kb]]` | Writes a test file (default 4096 KB) in chunks (default 8 KB) from internal DMA-capable RAM, unbuffered like the video download, and reports KB/s and the slowest chunk |
+
+Paths are below `/sdcard` (`/sdcard/logs`, `/logs` and `logs` are the same); `..` is rejected. Every command ends with `@OK` or `@ERR <reason>`, and the log lines go through the same port, one whole line at a time. A deleted photo or video stays marked as downloaded in `<camera-id>/catalog.csv`; to download a camera's thumbnails and media again, delete that file or the camera's directory (`rm -r <camera-id>`). `rm` refuses while the camera session is connecting or connected, and keeps the log file being written and unfinished files (`.part`, `.tmp`).
+
+`tools/dongle_console.py` (needs pyserial, part of the ESP-IDF Python environment) runs commands and copies files; lines that the driver dropped are found by their offsets and requested again, and the CRC-32 is checked:
+
+```sh
+python tools/dongle_console.py run status
+python tools/dongle_console.py run search --follow 600 --until "Camera session ended"
+python tools/dongle_console.py get logs/log-00003.txt ./log-00003.txt
+python tools/dongle_console.py get-tree <camera-id> ./card-copy
+```
+
+The script opens the port without changing DTR and RTS. pyserial's usual sequence clears DTR while RTS is still set, which resets a chip on its USB-Serial-JTAG port. In the Dev Container it uses `ESPPORT` (`/hostdev/ttyACM0`): the container's own `/dev/ttyACM0` is not updated when the board is plugged in again. esptool, however, finds the USB details of the port only under `/dev` and otherwise uses the wrong reset sequence (write timeout); with `/hostdev/ttyACM0` select the USB-Serial-JTAG reset explicitly, for example from the build directory: `python -m esptool --chip esp32c5 -b 460800 --before usb_reset --after hard_reset -p /hostdev/ttyACM0 write_flash "@flash_args"`. The first time the port is opened after the board was plugged in, the host's terminal echo can send boot output back as a command line; the console answers `@ERR unknown command`. Once the console has installed the USB-Serial-JTAG driver, log output that no computer reads is dropped after 50 ms instead of blocking. The component uses about 5 KB of internal RAM; its task stack is in PSRAM.
+
 ## Compatibility and Protocol Investigation
 
 Compatibility with cameras supported by Trailcam Go is a development goal, not a confirmed feature. First, investigate the normal connection flow and data formats for a specific camera model owned by the project team. Then implement a focused camera adapter and verify it using test media.
@@ -204,6 +231,7 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/web_ui` | Access point and web UI: status, search/stop, file browser and download, live log |
 | `components/sd_log` | Copy of the log output in text files on the SD card |
 | `components/diagnostics` | Reset reason, core dump status, and heap statistics |
+| `components/debug_console` | Commands on the USB-Serial-JTAG console: search/stop, status, SD card files |
 | `components/session_controller` | Session state machine and the task that drives the camera workflow |
 
 Components do not call each other directly. They report events through callbacks to the session controller, which runs them in one task:

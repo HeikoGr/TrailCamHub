@@ -3,9 +3,9 @@
  * persistent storage, the SD card and the network stack (with the Ethernet
  * uplink on boards that have one), brings the firmware of a Wi-Fi/BLE
  * co-processor up to date, starts the web UI and the dongle display where
- * enabled, then hands over to the session controller, which runs the camera
- * workflow. The BLE stack is started by the camera BLE module when it is
- * needed.
+ * enabled, as well as the serial command console, then hands over to the
+ * session controller, which runs the camera workflow. The BLE stack is
+ * started by the camera BLE module when it is needed.
  */
 
 #include "esp_err.h"
@@ -17,6 +17,7 @@
 
 #include "camera_protocol.h"
 #include "coprocessor_update.h"
+#include "debug_console.h"
 #include "dongle_ui.h"
 #include "ethernet_uplink.h"
 #include "sd_card.h"
@@ -27,7 +28,7 @@
 
 static const char *TAG = "trailcamhub";
 
-#if CONFIG_BOARD_TDONGLE || CONFIG_WEB_UI_ENABLE
+#if CONFIG_BOARD_TDONGLE || CONFIG_WEB_UI_ENABLE || CONFIG_DEBUG_CONSOLE_ENABLE
 #define HAS_STATUS_OUTPUT 1
 #if CONFIG_BOARD_TDONGLE
 static bool s_display_ready;
@@ -35,8 +36,11 @@ static bool s_display_ready;
 #if CONFIG_WEB_UI_ENABLE
 static bool s_web_ready;
 #endif
+#if CONFIG_DEBUG_CONSOLE_ENABLE
+static bool s_console_ready;
+#endif
 
-// Passes the workflow status to the display and the web UI.
+// Passes the workflow status to the display, the web UI and the console.
 static void on_session_status(const session_status_info_t *info)
 {
 #if CONFIG_BOARD_TDONGLE
@@ -64,8 +68,8 @@ static void on_session_status(const session_status_info_t *info)
         dongle_ui_set_status(phase, info->ssid, info->retry_delay_ms);
     }
 #endif
-#if CONFIG_WEB_UI_ENABLE
-    if (s_web_ready) {
+#if CONFIG_WEB_UI_ENABLE || CONFIG_DEBUG_CONSOLE_ENABLE
+    {
         const char *phase = "idle";
         switch (info->status) {
         case SESSION_STATUS_IDLE:
@@ -86,7 +90,16 @@ static void on_session_status(const session_status_info_t *info)
             phase = "finished";
             break;
         }
-        web_ui_set_status(phase, info->ssid, info->retry_delay_ms);
+#if CONFIG_WEB_UI_ENABLE
+        if (s_web_ready) {
+            web_ui_set_status(phase, info->ssid, info->retry_delay_ms);
+        }
+#endif
+#if CONFIG_DEBUG_CONSOLE_ENABLE
+        if (s_console_ready) {
+            debug_console_set_status(phase, info->ssid, info->retry_delay_ms);
+        }
+#endif
     }
 #endif
 }
@@ -101,6 +114,11 @@ static void on_media_progress(uint32_t done, uint32_t stored, uint32_t total)
 #if CONFIG_WEB_UI_ENABLE
     if (s_web_ready) {
         web_ui_set_media_progress(done, stored, total);
+    }
+#endif
+#if CONFIG_DEBUG_CONSOLE_ENABLE
+    if (s_console_ready) {
+        debug_console_set_media_progress(done, stored, total);
     }
 #endif
 }
@@ -130,6 +148,8 @@ extern "C" void app_main(void)
     error = sd_card_mount();
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "Continuing without SD card");
+    } else {
+        camera_protocol_init_storage();
     }
 #if CONFIG_SD_LOG_ENABLE
     if (sd_log_ready) {
@@ -149,8 +169,6 @@ extern "C" void app_main(void)
     error = coprocessor_update_run();
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "Continuing with the current C6 firmware");
-    } else {
-        camera_protocol_init_storage();
     }
 #endif
 
@@ -172,6 +190,16 @@ extern "C" void app_main(void)
     s_web_ready = web_ui_start(&web_callbacks) == ESP_OK;
     if (!s_web_ready) {
         ESP_LOGW(TAG, "Continuing without web UI");
+    }
+#endif
+#if CONFIG_DEBUG_CONSOLE_ENABLE
+    static const debug_console_callbacks_t console_callbacks = {
+        .on_search = session_controller_request_search,
+        .on_stop = session_controller_request_stop,
+    };
+    s_console_ready = debug_console_start(&console_callbacks) == ESP_OK;
+    if (!s_console_ready) {
+        ESP_LOGW(TAG, "Continuing without serial console");
     }
 #endif
 #if CONFIG_BOARD_TDONGLE
