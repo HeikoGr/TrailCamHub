@@ -1,8 +1,8 @@
 name: Backend
 
-# Checks the AWS SAM backend in backend/ and deploys it from main via OIDC.
-# Deployment is skipped until the repository variables from the one-time
-# bootstrap (backend/bootstrap/github-deploy.yaml) are set.
+# Checks the AWS SAM backend in backend/ and deploys it from main.
+# Deployment is skipped until the repository variables and secrets from the
+# one-time bootstrap (backend/bootstrap/github-deploy.yaml) are set.
 
 on:
   pull_request:
@@ -84,11 +84,10 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      vars.AWS_DEPLOY_ROLE_ARN != ''
+      vars.AWS_SAM_ARTIFACT_BUCKET != ''
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
     concurrency:
       group: backend-deploy
       cancel-in-progress: false
@@ -114,10 +113,27 @@ jobs:
         with:
           use-installer: true
 
-      - name: Configure AWS credentials (OIDC)
+      # AWS projects do not allow GitHub's OIDC provider, so the deploy user
+      # from the bootstrap stack signs in with an access key.
+      - name: Check deployment secrets
+        shell: bash
+        env:
+          HAS_KEY: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
+          HAS_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          missing=""
+          [[ "$HAS_KEY" == true ]] || missing+=" AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY"
+          [[ "$HAS_TOKEN" == true ]] || missing+=" TELEGRAM_BOT_TOKEN"
+          if [[ -n "$missing" ]]; then
+            echo "::error title=Deployment secrets missing::Set the repository secrets:$missing (see backend/README.md)"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Build and deploy
@@ -126,6 +142,7 @@ jobs:
           ARTIFACT_BUCKET: ${{ vars.AWS_SAM_ARTIFACT_BUCKET }}
           EXECUTION_ROLE: ${{ vars.AWS_CFN_EXECUTION_ROLE_ARN }}
           ALLOWED_ORIGIN: https://${{ github.repository_owner }}.github.io
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
           set -euo pipefail
           export PATH="$PWD/node_modules/.bin:$PATH"
@@ -136,7 +153,9 @@ jobs:
             --role-arn "$EXECUTION_ROLE" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides "AllowedOrigin=${ALLOWED_ORIGIN,,}"
+            --parameter-overrides \
+              "AllowedOrigin=${ALLOWED_ORIGIN,,}" \
+              "TelegramBotToken=${TELEGRAM_BOT_TOKEN}"
           api_url="$(aws cloudformation describe-stacks --stack-name trailcamhub \
             --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text)"
           echo "### Backend deployed" >> "$GITHUB_STEP_SUMMARY"

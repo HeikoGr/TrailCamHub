@@ -1,18 +1,13 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  One-time setup so GitHub Actions can deploy the TrailCamHub backend via OIDC,
-  without stored AWS keys. Deploy this stack once by hand (see backend/README.md).
-  It creates an artifact bucket, a CloudFormation execution role limited to
-  resources named after the backend stack, and the role GitHub Actions assumes.
+  One-time setup so GitHub Actions can deploy the TrailCamHub backend. Deploy
+  this stack once by hand (see backend/README.md). It creates an artifact
+  bucket, a CloudFormation execution role limited to resources named after the
+  backend stack, and an IAM user that may only start deployments of that stack.
+  An IAM user with access keys is used instead of GitHub OIDC because AWS
+  projects do not allow creating identity providers.
 
 Parameters:
-  GitHubRepository:
-    Type: String
-    Default: ThomasPohl/TrailCamHub
-    Description: owner/repo allowed to deploy (case-sensitive).
-  DeployBranch:
-    Type: String
-    Default: main
   BackendStackName:
     Type: String
     Default: trailcamhub
@@ -20,26 +15,8 @@ Parameters:
     Description: >-
       Name of the backend stack (lower case). All its resources start with this
       prefix; the execution role is limited to it.
-  CreateOidcProvider:
-    Type: String
-    AllowedValues: ['true', 'false']
-    Default: 'true'
-    Description: >-
-      Set to false if the account already has the GitHub OIDC provider
-      (token.actions.githubusercontent.com).
-
-Conditions:
-  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, 'true']
 
 Resources:
-  GitHubOidcProvider:
-    Type: AWS::IAM::OIDCProvider
-    Condition: ShouldCreateOidcProvider
-    Properties:
-      Url: https://token.actions.githubusercontent.com
-      ClientIdList: [sts.amazonaws.com]
-      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
-
   ArtifactBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -119,22 +96,12 @@ Resources:
                   - lambda:GetFunctionUrlConfig
                 Resource: '*'
 
-  # Assumed by GitHub Actions (main branch only) through OIDC.
-  GitHubDeployRole:
-    Type: AWS::IAM::Role
+  # Used by GitHub Actions through an access key (GitHub secrets). It can
+  # only hand a change set for the backend stack to CloudFormation, which then
+  # works with the execution role above.
+  GitHubDeployUser:
+    Type: AWS::IAM::User
     Properties:
-      MaxSessionDuration: 3600
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:ref:refs/heads/${DeployBranch}'
       Policies:
         - PolicyName: deploy-backend
           PolicyDocument:
@@ -175,9 +142,11 @@ Resources:
                 Resource: !GetAtt CloudFormationExecutionRole.Arn
 
 Outputs:
-  DeployRoleArn:
-    Description: Repository variable AWS_DEPLOY_ROLE_ARN
-    Value: !GetAtt GitHubDeployRole.Arn
+  DeployUserName:
+    Description: >-
+      Create its access key with: aws iam create-access-key --user-name <name>,
+      then store it as GitHub secrets AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+    Value: !Ref GitHubDeployUser
   CloudFormationExecutionRoleArn:
     Description: Repository variable AWS_CFN_EXECUTION_ROLE_ARN
     Value: !GetAtt CloudFormationExecutionRole.Arn
