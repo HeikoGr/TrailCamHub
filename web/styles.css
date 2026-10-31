@@ -285,3 +285,94 @@ footer {
   overflow-x: auto;
   white-space: pre;
 }
+
+/* --- Device setup --- */
+
+.ds-state {
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: #243342;
+  color: #90c8ff;
+  font-weight: 600;
+}
+
+.ds-state[data-state="IDLE"] {
+  color: #b8e3b8;
+}
+
+.ds-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-top: 1rem;
+}
+
+.ds-form,
+.ds-actions {
+  display: flex;
+  flex: 1 1 18rem;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.ds-form h3,
+.ds-actions h3 {
+  margin: 0;
+}
+
+.ds-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-weight: 600;
+}
+
+.ds-form input {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #2b3a4a;
+  border-radius: 8px;
+  background: #0f1821;
+  color: inherit;
+  font: inherit;
+}
+
+.ds-form small {
+  color: #bac8d5;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.ds-log {
+  max-height: 14rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #344353;
+  border-radius: 0.4rem;
+  background: #090d11;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  list-style: none;
+}
+
+.ds-log li {
+  margin: 0.2rem 0;
+  overflow-wrap: anywhere;
+}
+
+.ds-log-ok {
+  color: #b8e3b8;
+}
+
+.ds-log-error {
+  color: #ff9c9c;
+}
+
+.ds-log-sent {
+  color: #8d9aa8;
+}
+
+.ds-log-event {
+  color: #90c8ff;
+}

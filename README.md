@@ -106,21 +106,49 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/camera_link` | Camera session over UDP: discovery, PRE_LOGIN, PPPP/ARTEMIS packets, ALIVE, heartbeats |
 | `components/sd_storage` | microSD card mount |
 | `components/diagnostics` | Reset reason, core dump status, and heap statistics |
-| `components/session_controller` | Session state machine and the task that drives the camera workflow |
+| `components/session_controller` | Session state machine and the tasks that drive a scan: camera session, then backend uplink |
+| `components/hub_config` | Hub settings in NVS (home Wi-Fi, backend URL, device key) with validation |
+| `components/hub_console` | Line-based serial commands (`scan`, `upload`, `config …`) used by the web installer |
+| `components/uplink` | HTTPS sync with the backend: check-in, thumbnail upload, acknowledgement |
 
 Components do not call each other directly. They report events through callbacks to the session controller, which runs them in one task:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> BLE_ACTIVATION: start
+    [*] --> IDLE
+    IDLE --> BLE_ACTIVATION: scan requested
+    IDLE --> UPLINK_JOIN: upload requested
     BLE_ACTIVATION --> WIFI_JOIN: credentials received
-    WIFI_JOIN --> SESSION: Wi-Fi connected
+    BLE_ACTIVATION --> BACKOFF: timeout
+    WIFI_JOIN --> SESSION: camera Wi-Fi connected
     WIFI_JOIN --> BACKOFF: join timeout / Wi-Fi failed
-    SESSION --> BACKOFF: session ended (camera CLOSE, error, Wi-Fi lost)
     BACKOFF --> BLE_ACTIVATION: retry delay elapsed
+    BACKOFF --> IDLE: attempts used up
+    SESSION --> UPLINK_JOIN: session ended, uplink configured
+    SESSION --> IDLE: session ended, no uplink
+    UPLINK_JOIN --> UPLINK: home Wi-Fi connected
+    UPLINK_JOIN --> IDLE: join timeout / Wi-Fi failed
+    UPLINK --> IDLE: sync done
 ```
 
-BLE activation is paused while joining the camera Wi-Fi and during the session, and credentials that arrive later are ignored; by default the BLE stack is released at that point (see the BLE section). After a failure the controller leaves the camera network, waits, and activates the camera over BLE again. The retry delay starts at 5 seconds and doubles up to 60 seconds; it is reset once a session is reached. The Wi-Fi join timeout (30 seconds) and the retry delays are configurable in `menuconfig` under **TrailCamHub PoC → Session**. The pure state machine (`session_fsm.cpp`) is covered by host tests. Project options are defined in `main/Kconfig.projbuild` and appear in `menuconfig` under **TrailCamHub PoC**.
+The hub no longer retries forever. It stays **idle** until a scan is requested — over the serial console (for example with **Scan camera now** in the web installer), by the optional automatic scan interval, or once after boot if enabled. A scan wakes the camera over BLE, joins its Wi-Fi and runs the camera session (device info, media list, thumbnails to the SD card). If the camera is not reached, the scan is retried a few times (3 attempts, 10 seconds apart by default) and then given up. After the camera session, and if the uplink settings are complete, the hub joins the home Wi-Fi and syncs with the backend (see [`backend/README.md`](backend/README.md)): it checks in with the camera's battery and SD state and its media list, uploads the thumbnails the backend asks for, and acknowledges them; the backend's time also sets the hub's clock. **Upload stored data only** runs just that sync.
+
+BLE activation is paused while joining the camera Wi-Fi and during the session, and credentials that arrive later are ignored; by default the BLE stack is released at that point (see the BLE section). Timeouts, attempts, the retry delay, the automatic scan interval and scan-on-boot are configurable in `menuconfig` under **TrailCamHub PoC → Session**. The pure state machine (`session_fsm.cpp`), the command parser and the uplink wire format are covered by host tests. Project options are defined in `main/Kconfig.projbuild` and appear in `menuconfig` under **TrailCamHub PoC**.
+
+#### Serial commands
+
+The console UART accepts one command per line; replies and progress are lines starting with `TCH`:
+
+| Command | Effect |
+|---|---|
+| `status` | Current state and settings (secrets hidden) |
+| `scan` | Read the camera, then sync with the backend if configured |
+| `upload` | Sync the data already on the SD card with the backend |
+| `config show` | List settings |
+| `config set <key> <value>` / `config set-hex <key> <hex>` | Store a setting (`wifi_ssid`, `wifi_password`, `api_url`, `device_key`) |
+| `config unset <key>` / `config clear` | Erase one or all settings |
+
+The settings live in NVS on the hub. The web installer's **Device setup** panel uses exactly these commands.
 
 #### Host tests
 
@@ -192,6 +220,8 @@ The installer uses [ESP Web Tools](https://esphome.github.io/esp-web-tools/) to 
 Use a desktop Chromium-based browser with Web Serial support, such as current Google Chrome or Microsoft Edge. Open the HTTPS installer page, connect the ESP32-S3 using a USB data cable, select its serial port, and confirm the browser's install prompt. Close or finish the installer before opening the serial console; then click **Connect to serial output**, choose the board's port, and view ESP-IDF logs at 115200 baud. Browser serial access requires explicit permission and may not be available in other browsers or on mobile devices.
 
 The manual merged image and its SHA-256 checksum are also available on the installer page. Alternatively, download the `trailcamhub-esp32s3` artifact from a successful GitHub Actions run and follow its deployment instructions.
+
+After installing, the **Device setup** panel connects to the hub over the same USB serial port. It stores the home Wi-Fi, backend URL and device key on the hub (passwords and keys are written only, never read back), and has buttons to start a scan or an upload-only sync and to watch their progress.
 
 The installer does not configure the camera name or Wi-Fi-enable payload. It installs the default CI build, which sends `BT_KEY_ON` to request Wi-Fi activation after BLE discovery. Do not install firmware unless you trust its source, and use the installer only with a board you are authorized to modify.
 

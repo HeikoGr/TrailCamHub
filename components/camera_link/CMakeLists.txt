@@ -7,7 +7,8 @@ idf_component_register(SRCS "camera_protocol.cpp" "camera_prelogin.cpp"
                             "media_list.cpp" "media_transfer.cpp"
                             "bulk_reassembler.cpp" "device_info.cpp"
                             "media_catalog.cpp" "media_store.cpp"
-                       INCLUDE_DIRS "include"
-                       PRIV_INCLUDE_DIRS "."
+                       # "." exposes the pure protocol/catalog headers to the
+                       # uplink component.
+                       INCLUDE_DIRS "include" "."
                        REQUIRES esp_netif
                        PRIV_REQUIRES esp_timer lwip mbedtls sd_storage)
