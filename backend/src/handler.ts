@@ -13,15 +13,21 @@ function requireEnv(name: string): string {
 
 let botTokenPromise: Promise<string> | undefined;
 
-/** Reads the bot token from SSM Parameter Store once per Lambda container. */
-function botToken(): Promise<string> {
+/**
+ * The bot token comes from the environment (set at deploy time) or, if that
+ * is empty, from SSM Parameter Store - read once per Lambda container.
+ */
+export function botToken(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const direct = env.TELEGRAM_BOT_TOKEN?.trim();
+  if (direct) return Promise.resolve(direct);
+  const parameter = env.TELEGRAM_BOT_TOKEN_PARAM?.trim();
+  if (!parameter) {
+    return Promise.reject(
+      new Error('No Telegram bot token: set TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN_PARAM'),
+    );
+  }
   botTokenPromise ??= new SSMClient({})
-    .send(
-      new GetParameterCommand({
-        Name: requireEnv('TELEGRAM_BOT_TOKEN_PARAM'),
-        WithDecryption: true,
-      }),
-    )
+    .send(new GetParameterCommand({ Name: parameter, WithDecryption: true }))
     .then((result) => {
       const value = result.Parameter?.Value;
       if (!value) throw new Error('Telegram bot token parameter is empty');
@@ -40,7 +46,7 @@ function getDeps(): Deps {
   deps ??= {
     store: new DynamoStore(requireEnv('TABLE_NAME')),
     storage: new S3MediaStorage(requireEnv('MEDIA_BUCKET')),
-    botToken,
+    botToken: () => botToken(),
     now: () => Math.floor(Date.now() / 1000),
     config: {
       sleepIntervalS: Number(process.env.SLEEP_INTERVAL_S) || undefined,

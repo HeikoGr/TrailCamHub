@@ -1,8 +1,9 @@
 #pragma once
 
 // One sync with the TrailCamHub backend over the home Wi-Fi (already
-// joined): check in with the camera's telemetry and media list, upload the
-// thumbnails the backend is missing, and acknowledge uploads and commands.
+// joined): a single check-in for every camera stored on the SD card (with the
+// media the backend does not know yet), upload of the thumbnails the backend
+// is missing, and one acknowledgement for uploads and commands.
 
 #include <cstdint>
 #include <string>
@@ -15,7 +16,8 @@ namespace uplink
 {
 
 struct Report {
-    std::string camera_id;      // camera whose data was sent (may be empty)
+    int cameras_reported = 0;   // cameras in the check-in
+    int cameras_refused = 0;    // ... that belong to another hub
     int media_reported = 0;     // media entries in the check-in
     int thumbs_requested = 0;   // thumbnails the backend asked for
     int thumbs_uploaded = 0;    // ... uploaded successfully

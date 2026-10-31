@@ -100,10 +100,10 @@ std::string validate(Key key, const std::string &value)
         }
         return "";
     case Key::device_key: {
-        // <camId>.<secret>, as printed by backend/scripts/register-camera.mjs
+        // <hubId>.<secret>, as printed by backend/scripts/register-hub.mjs
         const std::size_t dot = value.find('.');
         if (dot == std::string::npos || dot == 0 || dot > 64) {
-            return "device key must look like <camId>.<secret>";
+            return "device key must look like <hubId>.<secret>";
         }
         const std::size_t secret_len = value.size() - dot - 1;
         if (secret_len < 16 || secret_len > 128) {

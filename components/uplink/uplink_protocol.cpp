@@ -103,6 +103,25 @@ void append_media(std::string &out, const MediaRef &m, bool full)
     out += buffer;
 }
 
+// Reads a boolean field; leaves `out` unchanged if it is missing.
+void find_bool(const std::string &json, const std::string &key, bool &out)
+{
+    const std::size_t key_pos = json.find("\"" + key + "\"");
+    if (key_pos == std::string::npos) {
+        return;
+    }
+    const std::size_t value =
+        json.find_first_not_of(" \t\r\n:", key_pos + key.size() + 2);
+    if (value == std::string::npos) {
+        return;
+    }
+    if (json.compare(value, 4, "true") == 0) {
+        out = true;
+    } else if (json.compare(value, 5, "false") == 0) {
+        out = false;
+    }
+}
+
 }  // namespace
 
 std::string json_escape(const std::string &text)
@@ -146,63 +165,90 @@ std::string build_checkin_json(const CheckinRequest &request)
     if (request.hub_bat_percent >= 0) {
         out += ",\"hubBatPercent\":" + std::to_string(request.hub_bat_percent);
     }
-    if (request.camera_known) {
-        const CameraTelemetry &c = request.camera;
-        std::string fields;
-        auto add = [&fields](const std::string &field) {
-            fields += (fields.empty() ? "" : ",") + field;
-        };
-        if (!c.model.empty()) {
-            add("\"model\":\"" + json_escape(c.model) + "\"");
-        }
-        if (!c.firmware.empty()) {
-            add("\"firmware\":\"" + json_escape(c.firmware) + "\"");
-        }
-        if (c.bat_percent >= 0) {
-            add("\"batPercent\":" + std::to_string(c.bat_percent));
-        }
-        if (c.sd_free_mb >= 0) {
-            add("\"sdFreeMB\":" + std::to_string(c.sd_free_mb));
-        }
-        out += ",\"camera\":{" + fields + "}";
-    }
-    out += ",\"media\":[";
-    bool first = true;
-    for (const MediaRef &m : request.media) {
-        if (m.file_type != 0 && m.file_type != 2) {
-            continue;
-        }
-        if (!first) {
+    out += ",\"cameras\":[";
+    for (std::size_t i = 0; i < request.cameras.size(); i++) {
+        const CameraReport &c = request.cameras[i];
+        if (i > 0) {
             out += ",";
         }
-        append_media(out, m, true);
-        first = false;
+        out += "{\"camId\":\"" + json_escape(c.cam_id) + "\"";
+        if (c.read_at > 0) {
+            out += ",\"readAt\":" + std::to_string(c.read_at);
+        }
+        if (!c.model.empty()) {
+            out += ",\"model\":\"" + json_escape(c.model) + "\"";
+        }
+        if (!c.firmware.empty()) {
+            out += ",\"firmware\":\"" + json_escape(c.firmware) + "\"";
+        }
+        if (c.bat_percent >= 0) {
+            out += ",\"batPercent\":" + std::to_string(c.bat_percent);
+        }
+        if (c.sd_free_mb >= 0) {
+            out += ",\"sdFreeMB\":" + std::to_string(c.sd_free_mb);
+        }
+        out += ",\"media\":[";
+        bool first = true;
+        for (const MediaRef &m : c.media) {
+            if (m.file_type != 0 && m.file_type != 2) {
+                continue;
+            }
+            if (!first) {
+                out += ",";
+            }
+            append_media(out, m, true);
+            first = false;
+        }
+        out += "]}";
     }
     out += "]}";
     return out;
 }
 
+bool ack_is_empty(const AckRequest &request)
+{
+    for (const CameraAck &c : request.cameras) {
+        if (!c.uploaded_thumbs.empty() || !c.commands.empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 std::string build_ack_json(const AckRequest &request)
 {
-    std::string out = "{\"uploadedThumbs\":[";
-    for (std::size_t i = 0; i < request.uploaded_thumbs.size(); i++) {
-        if (i > 0) {
+    std::string out = "{\"cameras\":[";
+    bool first_camera = true;
+    for (const CameraAck &camera : request.cameras) {
+        if (camera.uploaded_thumbs.empty() && camera.commands.empty()) {
+            continue;
+        }
+        if (!first_camera) {
             out += ",";
         }
-        append_media(out, request.uploaded_thumbs[i], false);
-    }
-    out += "],\"commands\":[";
-    for (std::size_t i = 0; i < request.commands.size(); i++) {
-        const CommandResult &c = request.commands[i];
-        if (i > 0) {
-            out += ",";
+        first_camera = false;
+        out += "{\"camId\":\"" + json_escape(camera.cam_id) +
+               "\",\"uploadedThumbs\":[";
+        for (std::size_t i = 0; i < camera.uploaded_thumbs.size(); i++) {
+            if (i > 0) {
+                out += ",";
+            }
+            append_media(out, camera.uploaded_thumbs[i], false);
         }
-        out += "{\"id\":\"" + json_escape(c.id) + "\",\"state\":\"" +
-               (c.done ? "done" : "failed") + "\"";
-        if (!c.done && !c.error.empty()) {
-            out += ",\"error\":\"" + json_escape(c.error) + "\"";
+        out += "],\"commands\":[";
+        for (std::size_t i = 0; i < camera.commands.size(); i++) {
+            const CommandResult &c = camera.commands[i];
+            if (i > 0) {
+                out += ",";
+            }
+            out += "{\"id\":\"" + json_escape(c.id) + "\",\"state\":\"" +
+                   (c.done ? "done" : "failed") + "\"";
+            if (!c.done && !c.error.empty()) {
+                out += ",\"error\":\"" + json_escape(c.error) + "\"";
+            }
+            out += "}";
         }
-        out += "}";
+        out += "]}";
     }
     out += "]}";
     return out;
@@ -216,23 +262,34 @@ bool parse_checkin_response(const std::string &json, CheckinResponse &out)
     }
     json_find_int(json, "sleepIntervalS", out.sleep_interval_s);
 
-    for (const std::string &obj : array_objects(json, "thumbUploads")) {
-        ThumbUpload upload;
-        if (json_find_int(obj, "dir", upload.dir) &&
-            json_find_int(obj, "num", upload.num) &&
-            json_find_string(obj, "url", upload.url) &&
-            upload.url.rfind("https://", 0) == 0) {
-            out.thumb_uploads.push_back(upload);
+    for (const std::string &camera_json : array_objects(json, "cameras")) {
+        CameraCheckin camera;
+        if (!json_find_string(camera_json, "camId", camera.cam_id) ||
+            camera.cam_id.empty()) {
+            continue;
         }
-    }
-    for (const std::string &obj : array_objects(json, "commands")) {
-        Command command;
-        if (json_find_string(obj, "id", command.id) &&
-            json_find_string(obj, "type", command.type)) {
-            json_find_int(obj, "dir", command.dir);
-            json_find_int(obj, "num", command.num);
-            out.commands.push_back(command);
+        find_bool(camera_json, "accepted", camera.accepted);
+        find_bool(camera_json, "resync", camera.resync);
+        for (const std::string &obj :
+             array_objects(camera_json, "thumbUploads")) {
+            ThumbUpload upload;
+            if (json_find_int(obj, "dir", upload.dir) &&
+                json_find_int(obj, "num", upload.num) &&
+                json_find_string(obj, "url", upload.url) &&
+                upload.url.rfind("https://", 0) == 0) {
+                camera.thumb_uploads.push_back(upload);
+            }
         }
+        for (const std::string &obj : array_objects(camera_json, "commands")) {
+            Command command;
+            if (json_find_string(obj, "id", command.id) &&
+                json_find_string(obj, "type", command.type)) {
+                json_find_int(obj, "dir", command.dir);
+                json_find_int(obj, "num", command.num);
+                camera.commands.push_back(command);
+            }
+        }
+        out.cameras.push_back(camera);
     }
     return true;
 }

@@ -250,3 +250,45 @@ button.link {
   margin-top: 24px;
   text-align: center;
 }
+
+.picker {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.picker__chip {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--bg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.picker__chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.picker__battery {
+  color: var(--hint);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.picker__battery[data-level='low'] {
+  color: var(--warning);
+}
+
+.picker__battery[data-level='critical'] {
+  color: var(--danger);
+}

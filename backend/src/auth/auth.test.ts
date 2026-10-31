@@ -45,7 +45,7 @@ describe('device keys', () => {
   it('generates keys that verify against their hash', () => {
     const { key, keyHash } = generateDeviceKey('CAM1');
     const parsed = parseDeviceKey(key);
-    expect(parsed?.camId).toBe('CAM1');
+    expect(parsed?.id).toBe('CAM1');
     expect(verifySecret(parsed?.secret ?? '', keyHash)).toBe(true);
   });
 

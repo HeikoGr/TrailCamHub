@@ -18,10 +18,21 @@ describe('buildDemoMedia', () => {
 describe('DemoApiClient', () => {
   const client = () => new DemoApiClient(() => 1_000_000, 0);
 
-  it('lists one demo camera', async () => {
+  it('lists two demo cameras on one hub', async () => {
     const cameras = await client().listCameras();
-    expect(cameras).toHaveLength(1);
-    expect(cameras[0]?.model).toBe('TC100');
+    expect(cameras.map((c) => c.name)).toEqual(['Garden', 'Meadow']);
+    expect(new Set(cameras.map((c) => c.hubId)).size).toBe(1);
+    expect(cameras[0]?.lastSeen).toBe(1_000_000 - 17 * 60);
+  });
+
+  it('keeps media per camera', async () => {
+    const api = client();
+    const [garden, meadow] = await api.listCameras();
+    const gardenMedia = await api.listMedia(garden?.camId ?? '');
+    const meadowMedia = await api.listMedia(meadow?.camId ?? '');
+    expect(gardenMedia[0]?.num).toBe(36);
+    expect(meadowMedia[0]?.num).toBe(12);
+    expect(await api.listMedia('unknown')).toEqual([]);
   });
 
   it('marks a requested video and keeps it after reloading the list', async () => {

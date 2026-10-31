@@ -8,6 +8,7 @@
 #include <time.h>
 #include <utime.h>
 
+#include "artemis_json.hpp"
 #include "esp_log.h"
 #include "sd_card.h"
 
@@ -141,21 +142,54 @@ std::string thumbnail_path(const std::string &camera_id, std::int64_t dir,
     return camera_dir(camera_id) + name;
 }
 
-bool save_last_camera(const camera::artemis::DeviceInfo &info)
+bool save_camera_info(const camera::artemis::DeviceInfo &info,
+                      std::int64_t read_at)
 {
-    const std::string text = camera::artemis::serialize_device_info(info);
-    return write_file(std::string(SD_CARD_MOUNT_POINT) + "/last_camera.json",
-                      text.data(), text.size());
+    const std::string dir = camera_dir(info.dev_id);
+    if (!ensure_dir(dir))
+        return false;
+    std::string text = camera::artemis::serialize_device_info(info);
+    // Append the read time as one more field of the same flat object.
+    // A clock before 2024 has not been set yet (no uplink since boot).
+    constexpr std::int64_t kClockValidFrom = 1704067200;
+    text.insert(text.size() - 1,
+                ",\"readAt\":" +
+                    std::to_string(read_at >= kClockValidFrom ? read_at : 0));
+    return write_file(dir + "/camera.json", text.data(), text.size());
 }
 
-bool load_last_camera(camera::artemis::DeviceInfo &out)
+bool load_camera_info(const std::string &camera_id,
+                      camera::artemis::DeviceInfo &out, std::int64_t &read_at)
 {
     std::string text;
-    if (!read_file(std::string(SD_CARD_MOUNT_POINT) + "/last_camera.json",
-                   text)) {
+    read_at = 0;
+    if (!read_file(camera_dir(camera_id) + "/camera.json", text) ||
+        !camera::artemis::parse_device_info(text, out)) {
         return false;
     }
-    return camera::artemis::parse_device_info(text, out);
+    camera::artemis::json_find_int(text, "readAt", read_at);
+    return true;
+}
+
+std::vector<std::string> list_cameras()
+{
+    std::vector<std::string> ids;
+    DIR *root = opendir(SD_CARD_MOUNT_POINT);
+    if (root == nullptr)
+        return ids;
+    struct dirent *entry;
+    while ((entry = readdir(root)) != nullptr) {
+        const std::string name = entry->d_name;
+        if (name.empty() || name[0] == '.')
+            continue;
+        struct stat info;
+        const std::string marker =
+            std::string(SD_CARD_MOUNT_POINT) + "/" + name + "/camera.json";
+        if (stat(marker.c_str(), &info) == 0)
+            ids.push_back(name);
+    }
+    closedir(root);
+    return ids;
 }
 
 }  // namespace camera::store

@@ -101,7 +101,7 @@
       return "The API URL must start with https://.";
     }
     if (values.device_key && !/^[A-Za-z0-9_-]{1,64}\.[A-Za-z0-9_-]{16,128}$/.test(values.device_key)) {
-      return "The device key must look like <camId>.<secret>.";
+      return "The device key must look like <hubId>.<secret>.";
     }
     return "";
   }

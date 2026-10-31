@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "device_info.hpp"
 #include "media_catalog.hpp"
@@ -60,10 +61,15 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
 std::string thumbnail_path(const std::string &camera_id, std::int64_t dir,
                            std::int64_t num);
 
-// Remembers the device info of the camera read last, at
-// /sdcard/last_camera.json, so a later upload knows which catalog to send and
-// the camera's battery state even after a restart.
-bool save_last_camera(const camera::artemis::DeviceInfo &info);
-bool load_last_camera(camera::artemis::DeviceInfo &out);
+// Stores the camera's device info next to its catalog, at
+// /sdcard/<camera-id>/camera.json, together with the time it was read
+// (Unix seconds, 0 = unknown). An upload sends every camera stored this way.
+bool save_camera_info(const camera::artemis::DeviceInfo &info,
+                      std::int64_t read_at);
+bool load_camera_info(const std::string &camera_id,
+                      camera::artemis::DeviceInfo &out, std::int64_t &read_at);
+
+// Ids (sanitized directory names) of all cameras with a camera.json.
+std::vector<std::string> list_cameras();
 
 }  // namespace camera::store

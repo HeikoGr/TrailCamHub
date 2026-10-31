@@ -13,7 +13,7 @@ export function StatusCard({ camera, now }: Props) {
         <div>
           <h2 className="status__name">{camera.name}</h2>
           <p className="hint">
-            {camera.model} · FW {camera.firmware}
+            {camera.model} · FW {camera.firmware} · via {camera.hubName}
           </p>
         </div>
         <p className="hint status__seen">Seen {formatRelative(camera.lastSeen, now)}</p>
