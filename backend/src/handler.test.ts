@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { describe, expect, it } from 'vitest';
-import { toApiRequest } from './handler';
+import { botToken, toApiRequest } from './handler';
 
 function event(overrides: Partial<APIGatewayProxyEventV2>): APIGatewayProxyEventV2 {
   return {
@@ -31,5 +31,15 @@ describe('toApiRequest', () => {
       event({ body: Buffer.from('{"a":1}').toString('base64'), isBase64Encoded: true }),
     );
     expect(req.body).toBe('{"a":1}');
+  });
+});
+
+describe('botToken', () => {
+  it('prefers the token from the environment', async () => {
+    await expect(botToken({ TELEGRAM_BOT_TOKEN: ' 123:abc ' })).resolves.toBe('123:abc');
+  });
+
+  it('fails clearly when no token source is configured', async () => {
+    await expect(botToken({ TELEGRAM_BOT_TOKEN: '' })).rejects.toThrow('No Telegram bot token');
   });
 });

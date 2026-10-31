@@ -25,7 +25,8 @@ Mini App ──tma <Telegram initData>─┘          │
   always-free tier.
 - **S3** bucket for thumbnails. The hub uploads and the app downloads directly via
   short-lived presigned URLs; the bucket stays private.
-- The **Telegram bot token** lives in SSM Parameter Store, never in the repository.
+- The **Telegram bot token** is a GitHub secret, passed to the Lambda function at
+  deploy time; it never appears in the repository.
 
 Everything is defined in [`template.yaml`](template.yaml) (AWS SAM).
 
@@ -129,35 +130,56 @@ sam validate --lint && sam build
 
 ## One-time AWS setup
 
-Prerequisites: AWS CLI and SAM CLI with admin credentials for your account, region
-`eu-central-1`.
+This works in an **AWS project** (the new AWS sign-up, where AWS manages the
+organization policies) as well as in a classic account. Projects do not allow
+GitHub's OIDC identity provider, so GitHub Actions deploys with the access key of
+an IAM user that may only deploy this stack, and the Telegram bot token is a
+GitHub secret instead of an SSM parameter.
 
-1. **Bot token** (from @BotFather) as SecureString:
+Prerequisites: AWS CLI with credentials for your project or account, in the
+project's home Region (`eu-central-1` for Germany; check AWS Settings →
+Projects). Set `AWS_REGION` accordingly if it differs.
 
-   ```bash
-   aws ssm put-parameter --name /trailcamhub/telegram-bot-token \
-     --type SecureString --value '<bot token>'
-   ```
-
-2. **GitHub deployment access** (OIDC role, artifact bucket, CloudFormation
-   execution role limited to `trailcamhub-*` resources):
+1. **Bootstrap** the deployment resources: artifact bucket, CloudFormation
+   execution role limited to `trailcamhub-*` resources, and the deploy user:
 
    ```bash
    aws cloudformation deploy --stack-name trailcamhub-github-deploy \
      --template-file bootstrap/github-deploy.yaml --capabilities CAPABILITY_IAM
-   # add --parameter-overrides CreateOidcProvider=false if the account already
-   # has the token.actions.githubusercontent.com provider
    aws cloudformation describe-stacks --stack-name trailcamhub-github-deploy \
      --query 'Stacks[0].Outputs'
    ```
 
-3. Set the outputs as **repository variables** (Settings → Secrets and variables →
-   Actions → Variables): `AWS_DEPLOY_ROLE_ARN`, `AWS_CFN_EXECUTION_ROLE_ARN`,
-   `AWS_SAM_ARTIFACT_BUCKET`, and optionally `AWS_REGION`.
+2. **Access key** for the deploy user (`DeployUserName` from the outputs):
 
-From then on, every push to `main` that touches `backend/` deploys the stack. The
-job summary shows the API URL; set it as `TRAILCAMHUB_API_BASE_URL` so the Mini
-App uses the backend instead of demo data.
+   ```bash
+   aws iam create-access-key --user-name <DeployUserName>
+   ```
+
+3. In GitHub (Settings → Secrets and variables → Actions) set:
+
+   | Kind     | Name                         | Value                                   |
+   | -------- | ---------------------------- | --------------------------------------- |
+   | Secret   | `AWS_ACCESS_KEY_ID`          | `AccessKeyId` from step 2               |
+   | Secret   | `AWS_SECRET_ACCESS_KEY`      | `SecretAccessKey` from step 2           |
+   | Secret   | `TELEGRAM_BOT_TOKEN`         | Token from @BotFather                   |
+   | Variable | `AWS_SAM_ARTIFACT_BUCKET`    | `ArtifactBucketName` output             |
+   | Variable | `AWS_CFN_EXECUTION_ROLE_ARN` | `CloudFormationExecutionRoleArn` output |
+   | Variable | `AWS_REGION` (optional)      | Home Region if not `eu-central-1`       |
+
+   Then run the **Backend** workflow on `main` (Actions → Backend → Run workflow)
+   or push a change under `backend/`. The job summary shows the API URL; set it as
+   the variable `TRAILCAMHUB_API_BASE_URL` so the Mini App uses the backend
+   instead of demo data.
+
+The access key can only create and run change sets for the `trailcamhub` stack;
+everything else happens through the execution role. Rotate it from time to time
+(`aws iam create-access-key`, update the secrets, `aws iam delete-access-key`).
+The bot token ends up in a Lambda environment variable, readable by anyone who
+can view the function's configuration in your account. In an account where
+Parameter Store is available, you can instead deploy with
+`TelegramBotTokenParameter=/trailcamhub/telegram-bot-token` and leave the token
+parameter empty.
 
 4. **Register a hub** and link it to your Telegram user id (e.g. from
    [@userinfobot](https://t.me/userinfobot)):
@@ -177,7 +199,9 @@ App uses the backend instead of demo data.
 
 Lambda, DynamoDB (provisioned 5/5) and outbound traffic stay within the AWS
 always-free allowances at this scale. S3 storage is billed normally (cents per
-month for thumbnails). Set an AWS Budgets alert anyway.
+month for thumbnails). In an AWS project the spend limit caps the costs: close to
+the limit, AWS blocks new resources and Lambda function URL calls instead of
+billing more. In a classic account, set an AWS Budgets alert.
 
 ## Not yet included
 
