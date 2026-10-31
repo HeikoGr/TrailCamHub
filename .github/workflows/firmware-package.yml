@@ -32,6 +32,10 @@ jobs:
           - board: tdongle-c5
             target: esp32c5
             board_defaults: sdkconfig.defaults.tdongle-c5
+          # Waveshare ESP32-P4-NANO (artifact only)
+          - board: esp32p4
+            target: esp32p4
+            board_defaults: ""
     env:
       IDF_PATH: /opt/esp/idf
       BOARD: ${{ matrix.board }}
