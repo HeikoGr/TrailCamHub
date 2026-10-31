@@ -7,8 +7,6 @@
  * The BLE stack is started by the camera BLE module when it is needed.
  */
 
-#include <stdio.h>
-
 #include "esp_err.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -27,17 +25,9 @@
 static const char *TAG = "trailcamhub";
 
 #if CONFIG_BOARD_TDONGLE
-// Camera Wi-Fi name of the last cycle: the controller clears it at the end of
-// a cycle, the finished screen shows it until the next search.
-static char s_camera_ssid[sizeof(((session_status_t *)0)->camera_ssid)];
-
 static void on_session_status(const session_status_t *status, void *context)
 {
     (void)context;
-    if (status->camera_ssid[0] != '\0') {
-        snprintf(s_camera_ssid, sizeof(s_camera_ssid), "%s",
-                 status->camera_ssid);
-    }
     dongle_ui_phase_t phase = DONGLE_UI_IDLE;
     switch (status->phase) {
     case SESSION_PHASE_IDLE:
@@ -47,7 +37,6 @@ static void on_session_status(const session_status_t *status, void *context)
         }
         break;
     case SESSION_PHASE_CAMERA_WAKE:
-        s_camera_ssid[0] = '\0';
         phase = DONGLE_UI_SEARCHING;
         break;
     case SESSION_PHASE_CAMERA_WIFI_JOIN:
@@ -63,7 +52,7 @@ static void on_session_status(const session_status_t *status, void *context)
         phase = DONGLE_UI_RETRY_WAIT;
         break;
     }
-    dongle_ui_set_status(phase, s_camera_ssid, status->retry_delay_ms);
+    dongle_ui_set_status(phase, status->camera_ssid, status->retry_delay_ms);
 }
 
 static void on_button_search(void)
