@@ -1,16 +1,42 @@
-import type { CameraRecord, CommandRecord, MediaRecord, VideoState } from '../model';
+import type { CameraRecord, CommandRecord, HubRecord, MediaRecord, VideoState } from '../model';
 import { mediaKey } from '../model';
-import type { Store, Telemetry } from './types';
+import type { CameraTelemetry, HubTelemetry, Store } from './types';
+
+function defined<T extends object>(values: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(values).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
+}
 
 /** In-memory store for tests and local experiments. */
 export class MemoryStore implements Store {
+  private readonly hubs = new Map<string, HubRecord>();
   private readonly cameras = new Map<string, CameraRecord>();
   private readonly links = new Map<number, Set<string>>();
   private readonly media = new Map<string, Map<string, MediaRecord>>();
   private readonly commands = new Map<string, Map<string, CommandRecord>>();
 
-  async putCamera(camera: CameraRecord): Promise<void> {
-    this.cameras.set(camera.camId, { ...camera });
+  async putHub(hub: HubRecord): Promise<void> {
+    this.hubs.set(hub.hubId, { ...hub });
+  }
+
+  async getHub(hubId: string): Promise<HubRecord | undefined> {
+    const hub = this.hubs.get(hubId);
+    return hub && { ...hub };
+  }
+
+  async updateHub(hubId: string, telemetry: HubTelemetry, lastSeen: number): Promise<void> {
+    const hub = this.hubs.get(hubId);
+    if (!hub) throw new Error(`Unknown hub ${hubId}`);
+    this.hubs.set(hubId, { ...hub, ...defined(telemetry), lastSeen });
+  }
+
+  async claimCamera(camId: string, hubId: string) {
+    const existing = this.cameras.get(camId);
+    if (existing) return { camera: { ...existing }, created: false };
+    const camera: CameraRecord = { camId, hubId, name: camId, lastSeen: 0 };
+    this.cameras.set(camId, camera);
+    return { camera: { ...camera }, created: true };
   }
 
   async getCamera(camId: string): Promise<CameraRecord | undefined> {
@@ -18,27 +44,31 @@ export class MemoryStore implements Store {
     return camera && { ...camera };
   }
 
-  async updateTelemetry(camId: string, telemetry: Telemetry, lastSeen: number): Promise<void> {
+  async updateCamera(camId: string, telemetry: CameraTelemetry, lastSeen: number): Promise<void> {
     const camera = this.cameras.get(camId);
     if (!camera) throw new Error(`Unknown camera ${camId}`);
-    const defined = Object.fromEntries(
-      Object.entries(telemetry).filter(([, value]) => value !== undefined),
-    );
-    this.cameras.set(camId, { ...camera, ...defined, lastSeen });
+    this.cameras.set(camId, { ...camera, ...defined(telemetry), lastSeen });
   }
 
-  async linkUser(userId: number, camId: string): Promise<void> {
+  async listHubCameraIds(hubId: string): Promise<string[]> {
+    return [...this.cameras.values()]
+      .filter((c) => c.hubId === hubId)
+      .map((c) => c.camId)
+      .sort();
+  }
+
+  async linkUser(userId: number, hubId: string): Promise<void> {
     const set = this.links.get(userId) ?? new Set<string>();
-    set.add(camId);
+    set.add(hubId);
     this.links.set(userId, set);
   }
 
-  async listUserCameraIds(userId: number): Promise<string[]> {
+  async listUserHubIds(userId: number): Promise<string[]> {
     return [...(this.links.get(userId) ?? [])].sort();
   }
 
-  async isLinked(userId: number, camId: string): Promise<boolean> {
-    return this.links.get(userId)?.has(camId) ?? false;
+  async isLinked(userId: number, hubId: string): Promise<boolean> {
+    return this.links.get(userId)?.has(hubId) ?? false;
   }
 
   async listMedia(camId: string): Promise<MediaRecord[]> {

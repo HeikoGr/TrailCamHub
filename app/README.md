@@ -2,7 +2,9 @@
 
 The phone UI for TrailCamHub: camera status (battery, SD card, last check-in),
 the latest thumbnails, and "download video" requests that the hub picks up at
-its next wake-up.
+its next wake-up. Users see every camera of the hubs linked to them; with more
+than one camera, a row of chips at the top switches between them (the last
+choice is remembered on the device).
 
 It is a plain static web app (React + Vite + TypeScript). Inside Telegram it
 runs as a **Mini App**: it uses Telegram's theme colors, the native back
@@ -12,10 +14,9 @@ web page, which is the starting point for a later PWA.
 
 ## Status
 
-First version. There is **no backend yet**: without `VITE_API_BASE_URL` the
-app runs in **demo mode** with in-memory sample data. The API types in
-`src/api/types.ts` are a draft of the v1 contract the AWS backend will
-implement.
+Without `VITE_API_BASE_URL` the app runs in **demo mode** with in-memory sample
+data (one hub with two cameras). `src/api/types.ts` mirrors the v1 API of the
+backend in `backend/`.
 
 ## Development
 
@@ -73,6 +74,6 @@ All requests carry `Authorization: tma <initData>`.
 
 | Method | Path                           | Purpose                                           |
 | ------ | ------------------------------ | ------------------------------------------------- |
-| GET    | `/v1/cameras`                  | Cameras linked to the user                        |
+| GET    | `/v1/cameras`                  | Cameras of all hubs linked to the user            |
 | GET    | `/v1/cameras/{camId}/media`    | Recordings with thumbnail URLs                    |
 | POST   | `/v1/cameras/{camId}/commands` | e.g. `{"type":"requestVideo","dir":100,"num":35}` |

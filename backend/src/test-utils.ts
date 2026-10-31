@@ -8,7 +8,9 @@ import { MemoryStore } from './store/memory';
 export const BOT_TOKEN = '123456:TEST-token-for-unit-tests';
 export const NOW = 1_800_000_000;
 export const USER_ID = 4242;
+export const HUB_ID = 'garden-hub';
 export const CAM_ID = 'F4C15606ED3B';
+export const CAM_2 = 'A1B2C3D4E5F6';
 
 /** Builds init data the way Telegram does, signed with BOT_TOKEN. */
 export function makeInitData(userId = USER_ID, authDate = NOW - 60, botToken = BOT_TOKEN): string {
@@ -34,12 +36,15 @@ export class FakeStorage implements MediaStorage {
   }
 }
 
+/** A store with one hub linked to USER_ID, no cameras yet. */
 export async function setup() {
   const store = new MemoryStore();
   const storage = new FakeStorage();
-  const { key, keyHash } = generateDeviceKey(CAM_ID);
-  await store.putCamera({ camId: CAM_ID, name: 'Garden', keyHash, lastSeen: 0 });
-  await store.linkUser(USER_ID, CAM_ID);
+  const hub = generateDeviceKey(HUB_ID);
+  await store.putHub({ hubId: HUB_ID, name: 'Garden hub', keyHash: hub.keyHash, lastSeen: 0 });
+  await store.linkUser(USER_ID, HUB_ID);
+  const other = generateDeviceKey('other-hub');
+  await store.putHub({ hubId: 'other-hub', name: 'Other', keyHash: other.keyHash, lastSeen: 0 });
   let nextId = 1;
   const deps: Deps = {
     store,
@@ -48,7 +53,7 @@ export async function setup() {
     now: () => NOW,
     newId: () => `cmd-${nextId++}`,
   };
-  return { store, storage, deps, deviceKey: key };
+  return { store, storage, deps, hubKey: hub.key, otherHubKey: other.key };
 }
 
 export function appRequest(
@@ -65,11 +70,11 @@ export function appRequest(
   };
 }
 
-export function deviceRequest(path: string, deviceKey: string, body: unknown): ApiRequest {
+export function hubRequest(path: string, hubKey: string, body: unknown): ApiRequest {
   return {
     method: 'POST',
     path,
-    headers: { authorization: `Bearer ${deviceKey}` },
+    headers: { authorization: `Bearer ${hubKey}` },
     body: JSON.stringify(body),
   };
 }
