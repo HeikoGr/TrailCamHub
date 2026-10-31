@@ -118,12 +118,20 @@ TEST_CASE("playback stream counts gaps, repeats and frames beyond the window")
     bool ack = false;
     playback.feed(0, parts[0].data(), parts[0].size(), c.sink, ack);
     playback.feed(2, parts[2].data(), parts[2].size(), c.sink, ack);  // gap
+    CHECK(playback.pending_frames() == 1);
+    playback.feed(2, parts[2].data(), parts[2].size(), c.sink, ack);  // again
+    CHECK(playback.pending_frames() == 1);
     playback.feed(0, parts[0].data(), parts[0].size(), c.sink, ack);  // repeat
     playback.feed(7, parts[7].data(), parts[7].size(), c.sink, ack);  // far
     CHECK_FALSE(ack);
-    CHECK(playback.reorder_stats().buffered == 1);
+    // Every frame ahead of a gap counts, the repeated one as well.
+    CHECK(playback.reorder_stats().buffered == 2);
     CHECK(playback.reorder_stats().duplicates == 1);
     CHECK(playback.reorder_stats().ahead == 1);
+    playback.feed(1, parts[1].data(), parts[1].size(), c.sink, ack);  // fills
+    CHECK(ack);
+    CHECK(playback.pending_frames() == 0);
+    CHECK(playback.frames() == 3);
     playback.reset();
     CHECK(playback.reorder_stats().buffered == 0);
 }

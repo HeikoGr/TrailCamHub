@@ -34,5 +34,12 @@ bool camera_protocol_work_completed(void);
 typedef void (*camera_protocol_progress_cb_t)(uint32_t done, uint32_t stored,
                                               uint32_t total);
 
+/*
+ * Prepares writing media files to the SD card in the background (a task and
+ * its buffer in PSRAM). Call once at boot, after the SD card is mounted;
+ * without it files are written directly.
+ */
+void camera_protocol_init_storage(void);
+
 /* Registers the progress callback; call before the first session. */
 void camera_protocol_set_progress_callback(camera_protocol_progress_cb_t cb);

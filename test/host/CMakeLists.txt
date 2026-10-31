@@ -46,6 +46,7 @@ add_executable(host_tests
     test_media_store.cpp
     test_pppp_session.cpp
     test_playback.cpp
+    test_playback_decoder.cpp
     test_prelogin.cpp
     test_session_fsm.cpp
     test_status_screen.cpp
@@ -67,6 +68,7 @@ add_executable(host_tests
     ${link_dir}/bulk_reassembler.cpp
     ${link_dir}/bulk_stream.cpp
     ${link_dir}/frame_reorder.cpp
+    ${link_dir}/playback_decoder.cpp
     ${link_dir}/playback_record.cpp
     ${link_dir}/playback_stream.cpp
     ${link_dir}/device_info.cpp

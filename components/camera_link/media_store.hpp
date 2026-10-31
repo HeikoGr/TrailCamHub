@@ -73,6 +73,15 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
                      std::int64_t num, const std::uint8_t *jpeg,
                      std::size_t size, std::int64_t media_time);
 
+// Creates <camera-id>/<name> for writing (replacing an existing file) and
+// returns it, or nullptr on error. For diagnostics.
+std::FILE *create_camera_file(const std::string &camera_id, const char *name);
+
+// Appends `line` (without newline) to <camera-id>/<name>; a new file starts
+// with `header`. For statistics. Returns false on error.
+bool append_line(const std::string &camera_id, const char *name,
+                 const char *header, const std::string &line);
+
 // Writes one downloaded media file. The bytes go to a ".part" file in
 // <camera-id>/media/; finish() renames it to <dir>_<num>.<extension>, so an
 // interrupted download never looks like a complete file. Without a given
@@ -88,8 +97,11 @@ class MediaFileWriter
         abort();
     }
 
+    // Without `buffered` the file has no stdio buffer (8 KB of internal RAM
+    // each); for writes of several KB from internal RAM, as the SD writer
+    // makes them.
     bool open(const std::string &camera_id, std::int64_t dir, std::int64_t num,
-              const char *extension = nullptr);
+              const char *extension = nullptr, bool buffered = true);
     bool write(const std::uint8_t *data, std::size_t size);
     // Closes the file, gives it its final name and dates it by `media_time`
     // (Unix seconds; <= 0 keeps the default). Returns false on error, in

@@ -30,50 +30,99 @@ PlaybackStream::PlaybackStream(std::size_t reorder_frames,
 void PlaybackStream::reset()
 {
     reorder_.reset();
-    record_.clear();
-    record_size_ = 0;
+    header_used_ = 0;
+    payload_left_ = 0;
     records_ = 0;
     failed_ = false;
+    collector_.reset();
 }
 
 bool PlaybackStream::consume(const std::uint8_t *data, std::size_t size,
-                             const RecordSink &sink)
+                             RecordHandler &handler)
 {
-    record_.insert(record_.end(), data, data + size);
-    while (true) {
-        if (record_size_ == 0) {
-            if (record_.size() < kHeaderSize) {
+    while (size > 0) {
+        if (payload_left_ == 0) {
+            const std::size_t take = kHeaderSize - header_used_ < size
+                                         ? kHeaderSize - header_used_
+                                         : size;
+            std::memcpy(header_ + header_used_, data, take);
+            header_used_ += take;
+            data += take;
+            size -= take;
+            if (header_used_ < kHeaderSize) {
                 return true;
             }
-            if (std::memcmp(record_.data(), kSignature, sizeof(kSignature)) !=
-                0) {
+            if (std::memcmp(header_, kSignature, sizeof(kSignature)) != 0) {
                 return false;
             }
-            const std::uint32_t length = read_u32_le(record_.data() + 16);
+            const std::uint32_t length = read_u32_le(header_ + 16);
             if (length == 0 || length > max_record_size_) {
                 return false;
             }
-            record_size_ = kHeaderSize + length;
+            header_used_ = 0;
+            payload_left_ = length;
+            if (!handler.begin(read_u32_le(header_ + 8),
+                               read_u32_le(header_ + 12), length)) {
+                return false;
+            }
+            continue;
         }
-        if (record_.size() < record_size_) {
-            return true;
-        }
-        if (!sink(read_u32_le(record_.data() + 8),
-                  read_u32_le(record_.data() + 12),
-                  record_.data() + kHeaderSize, record_size_ - kHeaderSize)) {
+        const std::size_t take = payload_left_ < size ? payload_left_ : size;
+        if (!handler.data(data, take)) {
             return false;
         }
-        ++records_;
-        // Usually only a short tail of the last frame is left to move.
-        record_.erase(record_.begin(), record_.begin() + record_size_);
-        record_size_ = 0;
+        data += take;
+        size -= take;
+        payload_left_ -= take;
+        if (payload_left_ == 0) {
+            if (!handler.end()) {
+                return false;
+            }
+            ++records_;
+        }
     }
+    return true;
+}
+
+bool PlaybackStream::Collector::begin(std::uint32_t version, std::uint32_t type,
+                                      std::size_t payload_size)
+{
+    version_ = version;
+    type_ = type;
+    payload_.clear();
+    payload_.reserve(payload_size);
+    return true;
+}
+
+bool PlaybackStream::Collector::data(const std::uint8_t *data, std::size_t size)
+{
+    payload_.insert(payload_.end(), data, data + size);
+    return true;
+}
+
+bool PlaybackStream::Collector::end()
+{
+    return (*sink)(version_, type_, payload_.data(), payload_.size());
+}
+
+void PlaybackStream::Collector::reset()
+{
+    payload_.clear();
 }
 
 PlaybackStream::Status PlaybackStream::feed(std::uint16_t seq,
                                             const std::uint8_t *payload,
                                             std::size_t size,
                                             const RecordSink &sink, bool &ack)
+{
+    collector_.sink = &sink;
+    return feed(seq, payload, size, collector_, ack);
+}
+
+PlaybackStream::Status PlaybackStream::feed(std::uint16_t seq,
+                                            const std::uint8_t *payload,
+                                            std::size_t size,
+                                            RecordHandler &handler, bool &ack)
 {
     ack = false;
     if (failed_) {
@@ -91,9 +140,9 @@ PlaybackStream::Status PlaybackStream::feed(std::uint16_t seq,
     }
     const FrameReorder::Outcome outcome =
         reorder_.feed(seq, payload, size,
-                      [this, &sink](std::uint64_t, const std::uint8_t *frame,
-                                    std::size_t frame_size) {
-                          return consume(frame, frame_size, sink);
+                      [this, &handler](std::uint64_t, const std::uint8_t *frame,
+                                       std::size_t frame_size) {
+                          return consume(frame, frame_size, handler);
                       });
     if (outcome == FrameReorder::Outcome::failed) {
         failed_ = true;

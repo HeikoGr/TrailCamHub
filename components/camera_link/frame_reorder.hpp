@@ -75,6 +75,11 @@ class FrameReorder
     {
         return static_cast<std::uint16_t>(base_seq_ + next_frame_);
     }
+    // Frames kept in the window, waiting for a missing one before them.
+    std::size_t pending() const
+    {
+        return pending_;
+    }
     // Index of the frame expected next (= number of frames passed on).
     std::uint64_t next_frame() const
     {
@@ -91,6 +96,7 @@ class FrameReorder
     std::vector<std::uint16_t> sizes_;  // 0: slot empty
     std::uint64_t next_frame_ = 0;
     std::uint64_t limit_ = 0;
+    std::size_t pending_ = 0;
     Stats stats_;
     std::uint16_t base_seq_ = 0;
     bool started_ = false;

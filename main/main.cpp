@@ -149,6 +149,8 @@ extern "C" void app_main(void)
     error = coprocessor_update_run();
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "Continuing with the current C6 firmware");
+    } else {
+        camera_protocol_init_storage();
     }
 #endif
 

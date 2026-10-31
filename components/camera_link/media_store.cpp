@@ -139,8 +139,46 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
 // Larger stdio buffer for downloads: fewer, larger FAT writes.
 constexpr size_t kMediaWriteBuffer = 8 * 1024;
 
+std::FILE *create_camera_file(const std::string &camera_id, const char *name)
+{
+    const std::string dir = camera_dir(camera_id);
+    if (!ensure_dir(dir))
+        return nullptr;
+    const std::string path = dir + "/" + name;
+    std::FILE *file = fopen(path.c_str(), "w");
+    if (file == nullptr) {
+        ESP_LOGW(TAG, "create %s failed: errno %d", path.c_str(), errno);
+    }
+    return file;
+}
+
+bool append_line(const std::string &camera_id, const char *name,
+                 const char *header, const std::string &line)
+{
+    const std::string dir = camera_dir(camera_id);
+    if (!ensure_dir(dir))
+        return false;
+    const std::string path = dir + "/" + name;
+    struct stat st;
+    const bool exists = stat(path.c_str(), &st) == 0;
+    FILE *file = fopen(path.c_str(), "a");
+    if (file == nullptr) {
+        ESP_LOGW(TAG, "open %s for append failed: errno %d", path.c_str(),
+                 errno);
+        return false;
+    }
+    bool ok = true;
+    if (!exists) {
+        ok = fprintf(file, "%s\n", header) >= 0;
+    }
+    ok = ok && fprintf(file, "%s\n", line.c_str()) >= 0;
+    ok = fclose(file) == 0 && ok;
+    return ok;
+}
+
 bool MediaFileWriter::open(const std::string &camera_id, std::int64_t dir,
-                           std::int64_t num, const char *extension)
+                           std::int64_t num, const char *extension,
+                           bool buffered)
 {
     abort();
     const std::string camera = camera_dir(camera_id);
@@ -161,7 +199,11 @@ bool MediaFileWriter::open(const std::string &camera_id, std::int64_t dir,
                  errno);
         return false;
     }
-    setvbuf(file_, nullptr, _IOFBF, kMediaWriteBuffer);
+    if (buffered) {
+        setvbuf(file_, nullptr, _IOFBF, kMediaWriteBuffer);
+    } else {
+        setvbuf(file_, nullptr, _IONBF, 0);
+    }
     return true;
 }
 

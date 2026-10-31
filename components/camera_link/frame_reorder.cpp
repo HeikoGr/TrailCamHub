@@ -16,6 +16,7 @@ void FrameReorder::reset()
     stats_ = Stats();
     next_frame_ = 0;
     limit_ = 0;
+    pending_ = 0;
     base_seq_ = 0;
     started_ = false;
 }
@@ -64,6 +65,7 @@ FrameReorder::Outcome FrameReorder::feed(std::uint16_t seq,
         if (sizes_[slot] == 0 && size > 0) {
             std::memcpy(&buffer_[slot * kMaxFramePayload], payload, size);
             sizes_[slot] = static_cast<std::uint16_t>(size);
+            ++pending_;
         }
         return Outcome::buffered;
     }
@@ -79,6 +81,7 @@ FrameReorder::Outcome FrameReorder::feed(std::uint16_t seq,
         }
         const std::size_t slot_size = sizes_[slot];
         sizes_[slot] = 0;
+        --pending_;
         if (!deliver(next_frame_, &buffer_[slot * kMaxFramePayload],
                      slot_size)) {
             return Outcome::failed;
