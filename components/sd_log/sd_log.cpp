@@ -195,9 +195,11 @@ void writer_task(void *arg)
         const TickType_t now = xTaskGetTickCount();
         if (dirty &&
             now - last_flush >= pdMS_TO_TICKS(SD_LOG_FLUSH_INTERVAL_MS)) {
-            if (s_file != NULL) {
-                fflush(s_file);
-                fsync(fileno(s_file));
+            if (s_file != NULL &&
+                (fflush(s_file) != 0 || fsync(fileno(s_file)) != 0)) {
+                // The data did not reach the card: continue in a new file.
+                fclose(s_file);
+                s_file = NULL;
             }
             last_flush = now;
             dirty = false;

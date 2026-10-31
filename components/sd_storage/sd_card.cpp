@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdkconfig.h"
@@ -26,6 +27,12 @@
 // The log, a download, the catalog and the web server may hold files at once.
 #define SD_CARD_MAX_OPEN_FILES 8
 #define SD_CARD_ALLOCATION_UNIT_SIZE (16 * 1024)
+// Bounce buffer of the SD driver, in internal (DMA-capable) RAM. The host
+// reads and writes only such RAM; for data elsewhere (PSRAM: FAT's buffers,
+// the log, thumbnails) the driver otherwise allocates a temporary buffer of up
+// to 8 KB for every access. While BLE runs that either failed (the SD log
+// stopped) or took the RAM BLE needed (its GATT requests failed).
+#define SD_CARD_BOUNCE_BUFFER_SIZE 2048
 #if CONFIG_SD_CARD_SPI_MODE
 #define SD_CARD_SPI_HOST SPI2_HOST
 // The bus may be shared with a display that sends whole frames (160x80
@@ -36,6 +43,22 @@
 static const char *TAG = "trailcamhub_sd";
 #if CONFIG_SD_CARD_ENABLE
 static sdmmc_card_t *s_card;
+
+// Allocated once, at mount; kept for the life of the firmware (an unmount
+// and a new mount reuse it).
+static void *bounce_buffer(void)
+{
+    static void *buffer;
+    if (buffer == NULL) {
+        buffer = heap_caps_malloc(SD_CARD_BOUNCE_BUFFER_SIZE,
+                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (buffer == NULL) {
+            ESP_LOGW(TAG, "No SD bounce buffer; the driver allocates one "
+                          "per access");
+        }
+    }
+    return buffer;
+}
 #endif
 #if CONFIG_SD_CARD_SPI_MODE
 static bool s_spi_bus_ready;
@@ -80,6 +103,7 @@ esp_err_t sd_card_mount(void)
     s_spi_bus_ready = true;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.dma_aligned_buffer = bounce_buffer();
     host.slot = SD_CARD_SPI_HOST;
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot.host_id = SD_CARD_SPI_HOST;
@@ -91,6 +115,7 @@ esp_err_t sd_card_mount(void)
                                     &mount_config, &s_card);
 #else
     sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.dma_aligned_buffer = bounce_buffer();
     sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
 #if CONFIG_IDF_TARGET_ESP32P4
     // Slot 0 uses fixed IO MUX pins; slot 1 belongs to the ESP32-C6
