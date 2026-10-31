@@ -63,6 +63,7 @@ const session::Config kConfig = {
     CONFIG_SESSION_RETRY_DELAY_MIN_S * 1000u,
     CONFIG_SESSION_RETRY_DELAY_MAX_S * 1000u,
     kAutoStart,
+    CONFIG_SESSION_BLE_ACTIVATION_TIMEOUT_S * 1000u,
 };
 
 QueueHandle_t s_events;
@@ -372,8 +373,9 @@ esp_err_t session_controller_start(void)
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(TAG,
-             "Session controller started (Wi-Fi join timeout %u s, "
-             "retry delay %u-%u s)",
+             "Session controller started (BLE activation timeout %u s, "
+             "Wi-Fi join timeout %u s, retry delay %u-%u s)",
+             (unsigned)CONFIG_SESSION_BLE_ACTIVATION_TIMEOUT_S,
              (unsigned)CONFIG_SESSION_WIFI_JOIN_TIMEOUT_S,
              (unsigned)CONFIG_SESSION_RETRY_DELAY_MIN_S,
              (unsigned)CONFIG_SESSION_RETRY_DELAY_MAX_S);

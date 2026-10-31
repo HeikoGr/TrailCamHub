@@ -213,10 +213,13 @@ stateDiagram-v2
     [*] --> BLE_ACTIVATION: start
     BLE_ACTIVATION --> WIFI_JOIN: credentials received
     WIFI_JOIN --> SESSION: Wi-Fi connected
+    BLE_ACTIVATION --> BACKOFF: activation timeout
     WIFI_JOIN --> BACKOFF: join timeout / Wi-Fi failed
     SESSION --> BACKOFF: session ended (camera CLOSE, error, Wi-Fi lost)
     BACKOFF --> BLE_ACTIVATION: retry delay elapsed
 ```
+
+The BLE activation (scan, connect, credentials) has a timeout of 120 s (`CONFIG_SESSION_BLE_ACTIVATION_TIMEOUT_S`); then BLE is released and the controller retries after the retry delay. Before, an activation whose scan could not be started (`Could not start BLE scan: 519`, the controller's "Memory Capacity Exceeded") waited forever, and a search request during it was ignored; a search request now starts the activation over. At the end of a session `camera_protocol_run()` frees the buffers of its containers (catalog, queues, reassemblers): their allocations are below `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` (16 KB) and so in internal RAM, and after a stopped session they held about 14 KB of it. The next BLE activation then found about 4 KB instead of 12 KB free, its scan failed, and stopping the half-started controller crashed (`esp_bt_controller_deinit`).
 
 BLE activation is paused while joining the camera Wi-Fi and during the session, and credentials that arrive later are ignored; by default the BLE stack is released at that point (see the BLE section). After a failure the controller leaves the camera network, waits, and activates the camera over BLE again. The retry delay starts at 5 seconds and doubles up to 60 seconds; it is reset once a session is reached. The Wi-Fi join timeout (30 seconds) and the retry delays are configurable in `menuconfig` under **TrailCamHub PoC → Session**. The pure state machine (`session_fsm.cpp`) is covered by host tests. Project options are defined in `main/Kconfig.projbuild` and appear in `menuconfig` under **TrailCamHub PoC**.
 

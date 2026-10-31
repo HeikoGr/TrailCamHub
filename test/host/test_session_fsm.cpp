@@ -34,7 +34,8 @@ TEST_CASE("normal flow from start to session")
 
     Result result = fsm.handle(Event::start);
     CHECK(result.next == State::ble_activation);
-    CHECK(result.actions == kResumeBle);
+    CHECK(result.actions == (kResumeBle | kStartTimer));
+    CHECK(result.timer_ms == 120000);
 
     result = fsm.handle(Event::credentials_received);
     CHECK(result.next == State::wifi_join);
@@ -64,7 +65,8 @@ TEST_CASE("Wi-Fi join timeout or failure leads to backoff and reactivation")
 
         result = fsm.handle(Event::timeout);
         CHECK(result.next == State::ble_activation);
-        CHECK(result.actions == kResumeBle);
+        CHECK(result.actions == (kResumeBle | kStartTimer));
+        CHECK(result.timer_ms == 120000);
     }
 }
 
@@ -150,7 +152,8 @@ TEST_CASE("without auto start the machine waits for the user")
 
     result = fsm.handle(Event::user_start);
     CHECK(result.next == State::ble_activation);
-    CHECK(result.actions == kResumeBle);
+    CHECK(result.actions == (kResumeBle | kStartTimer));
+    CHECK(result.timer_ms == 120000);
 }
 
 TEST_CASE("user_start skips the backoff delay and resets it")
@@ -168,6 +171,43 @@ TEST_CASE("user_start skips the backoff delay and resets it")
     CHECK(fsm.next_retry_delay_ms() == 5000);
 }
 
+TEST_CASE("a BLE activation that times out releases BLE and backs off")
+{
+    Fsm fsm(kConfig);
+    fsm.handle(Event::start);
+
+    Result result = fsm.handle(Event::timeout);
+    CHECK(result.next == State::backoff);
+    CHECK(has(result, kPauseBle));
+    CHECK(has(result, kStartTimer));
+    CHECK(result.timer_ms == 5000);
+
+    result = fsm.handle(Event::timeout);
+    CHECK(result.next == State::ble_activation);
+    CHECK(has(result, kResumeBle));
+    CHECK(result.timer_ms == 120000);
+
+    // The delay grows like after other failures.
+    result = fsm.handle(Event::timeout);
+    CHECK(result.next == State::backoff);
+    CHECK(result.timer_ms == 10000);
+}
+
+TEST_CASE("user_start during the BLE activation starts it over")
+{
+    Fsm fsm(kConfig);
+    fsm.handle(Event::start);
+    fsm.handle(Event::timeout);
+    fsm.handle(Event::timeout);
+    REQUIRE(fsm.state() == State::ble_activation);
+
+    const Result result = fsm.handle(Event::user_start);
+    CHECK(result.next == State::ble_activation);
+    CHECK(result.actions == (kPauseBle | kResumeBle | kStartTimer));
+    CHECK(result.timer_ms == 120000);
+    CHECK(fsm.next_retry_delay_ms() == 5000);
+}
+
 TEST_CASE("user_stop returns to idle from every active state")
 {
     {
@@ -176,6 +216,7 @@ TEST_CASE("user_stop returns to idle from every active state")
         Result result = fsm.handle(Event::user_stop);
         CHECK(result.next == State::idle);
         CHECK(has(result, kPauseBle));
+        CHECK(has(result, kCancelTimer));
     }
     {
         Fsm fsm(kConfig);

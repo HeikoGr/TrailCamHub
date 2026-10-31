@@ -55,6 +55,9 @@ struct Config {
     std::uint32_t retry_delay_max_ms;
     // False: stay idle after Event::start until Event::user_start.
     bool auto_start = true;
+    // Time allowed for the BLE activation (scan, connect, credentials) before
+    // the controller releases BLE and retries after a backoff.
+    std::uint32_t ble_activation_timeout_ms = 120000;
 };
 
 struct Result {

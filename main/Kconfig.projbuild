@@ -91,6 +91,17 @@ config SESSION_AUTO_START
         Failed attempts are still retried automatically until the user
         stops them.
 
+config SESSION_BLE_ACTIVATION_TIMEOUT_S
+    int "BLE activation timeout (seconds)"
+    range 30 3600
+    default 120
+    help
+        Time allowed for finding the camera over BLE, connecting to it and
+        receiving its Wi-Fi credentials. On timeout the controller releases
+        BLE (which also opens a closed web UI access point again) and tries
+        again after the retry delay. Without it, an activation whose scan
+        could not be started waited forever.
+
 config SESSION_WIFI_JOIN_TIMEOUT_S
     int "Camera Wi-Fi join timeout (seconds)"
     range 5 300

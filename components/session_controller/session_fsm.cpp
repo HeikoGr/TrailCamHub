@@ -44,7 +44,8 @@ Result Fsm::handle(Event event)
         }
         if (event == Event::start || event == Event::user_start) {
             retry_delay_ms_ = config_.retry_delay_min_ms;
-            return transition(State::ble_activation, kResumeBle);
+            return transition(State::ble_activation, kResumeBle | kStartTimer,
+                              config_.ble_activation_timeout_ms);
         }
         break;
 
@@ -54,8 +55,19 @@ Result Fsm::handle(Event event)
                               kPauseBle | kConnectWifi | kStartTimer,
                               config_.wifi_join_timeout_ms);
         }
+        if (event == Event::timeout) {
+            // Releasing BLE also ends a scan that could not be started.
+            return enter_backoff(kPauseBle);
+        }
+        if (event == Event::user_start) {
+            // Start over, for example when the activation hangs.
+            retry_delay_ms_ = config_.retry_delay_min_ms;
+            return transition(State::ble_activation,
+                              kPauseBle | kResumeBle | kStartTimer,
+                              config_.ble_activation_timeout_ms);
+        }
         if (event == Event::user_stop) {
-            return transition(State::idle, kPauseBle);
+            return transition(State::idle, kCancelTimer | kPauseBle);
         }
         break;
 
@@ -100,11 +112,14 @@ Result Fsm::handle(Event event)
 
     case State::backoff:
         if (event == Event::timeout) {
-            return transition(State::ble_activation, kResumeBle);
+            return transition(State::ble_activation, kResumeBle | kStartTimer,
+                              config_.ble_activation_timeout_ms);
         }
         if (event == Event::user_start) {
             retry_delay_ms_ = config_.retry_delay_min_ms;
-            return transition(State::ble_activation, kCancelTimer | kResumeBle);
+            return transition(State::ble_activation,
+                              kCancelTimer | kResumeBle | kStartTimer,
+                              config_.ble_activation_timeout_ms);
         }
         if (event == Event::user_stop) {
             return transition(State::idle, kCancelTimer);
