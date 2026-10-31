@@ -1,16 +1,19 @@
 /*
- * This module initializes diagnostics, persistent storage and the SD card,
- * then starts the session controller, which runs a camera/uplink cycle when
- * one is requested, and the serial console, which accepts those requests and
- * the hub settings. The BLE stack is started by the camera BLE module when it
- * is needed.
+ * This module initializes diagnostics, persistent storage, the network stack
+ * and the SD card, then starts the session controller, which runs a
+ * camera/uplink cycle when one is requested, and the serial console, which
+ * accepts those requests and the hub settings. The BLE stack is started by the
+ * camera BLE module when it is needed.
  */
 
 #include "esp_err.h"
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#include "camera_protocol.h"
 #include "hub_console.h"
 #include "sd_card.h"
 #include "sd_log.h"
@@ -43,6 +46,8 @@ extern "C" void app_main(void)
     error = sd_card_mount();
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "Continuing without SD card");
+    } else {
+        camera_protocol_init_storage();
     }
 #if CONFIG_SD_LOG_ENABLE
     if (sd_log_ready) {
@@ -52,6 +57,12 @@ extern "C" void app_main(void)
     }
 #endif
 #endif
+
+    // The network stack and the default event loop are shared by everything
+    // that uses Wi-Fi or Ethernet (camera Wi-Fi, home Wi-Fi uplink, later an
+    // access point or a wired uplink), so they are set up once here.
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     ESP_ERROR_CHECK(session_controller_init());
     error = session_controller_start();
