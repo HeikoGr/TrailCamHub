@@ -15,6 +15,7 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#include "camera_ble.h"
 #include "camera_protocol.h"
 #include "coprocessor_update.h"
 #include "debug_console.h"
@@ -190,6 +191,14 @@ extern "C" void app_main(void)
     s_web_ready = web_ui_start(&web_callbacks) == ESP_OK;
     if (!s_web_ready) {
         ESP_LOGW(TAG, "Continuing without web UI");
+    }
+#endif
+#if CONFIG_WEB_UI_ENABLE
+    // A running access point leaves the BLE connection setup on the ESP32-C5
+    // no air time once it has run for a while (camera connections timed out),
+    // so it is closed for the few seconds until the camera has answered.
+    if (s_web_ready) {
+        camera_ble_set_link_callback(web_ui_suspend_access_point);
     }
 #endif
 #if CONFIG_DEBUG_CONSOLE_ENABLE

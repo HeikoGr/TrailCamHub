@@ -52,6 +52,10 @@
 #define WEB_NVS_NAMESPACE "web_ui"
 #define WEB_NVS_PASSWORD_KEY "ap_key"
 #define WEB_NVS_CHANNEL_KEY "ap_channel"
+// Largest free block of internal RAM needed to open the access point again.
+// When the Wi-Fi driver cannot allocate the beacon it crashes, so the access
+// point stays closed until the next status change finds enough memory.
+#define WEB_AP_REOPEN_MIN_BLOCK (8 * 1024)
 
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
@@ -70,6 +74,13 @@ httpd_handle_t s_server;
 char s_ssid[33];
 char s_password[65];
 char s_url[32];
+// Kept to open the access point again after web_ui_suspend_access_point().
+wifi_config_t s_ap_config;
+bool s_ap_started;
+// Closed by web_ui_suspend_access_point(), or still closed because the last
+// attempt to open it found too little memory. Shared under s_lock.
+bool s_ap_suspended;
+bool s_ap_reopen_wanted;
 
 SemaphoreHandle_t s_lock;
 // Shared with the setters under s_lock.
@@ -213,6 +224,8 @@ esp_err_t start_access_point()
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG, "AP+STA mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &config), TAG,
                         "AP configuration");
+    s_ap_config = config;
+    s_ap_started = true;
     ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT,
                                                    WIFI_EVENT_STA_CONNECTED,
                                                    on_station_connected, NULL),
@@ -610,6 +623,58 @@ esp_err_t web_ui_start(const web_ui_callbacks_t *callbacks)
     return start_server();
 }
 
+// Opens the suspended access point if it is wanted and the memory suffices.
+// Called with s_lock held.
+static void reopen_access_point()
+{
+    if (!s_ap_suspended || !s_ap_reopen_wanted) {
+        return;
+    }
+    const size_t block = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    if (block < WEB_AP_REOPEN_MIN_BLOCK) {
+        ESP_LOGW(TAG,
+                 "Access point stays closed: largest free internal block %u "
+                 "B; trying again at the next status change",
+                 (unsigned)block);
+        return;
+    }
+    esp_err_t error = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (error == ESP_OK) {
+        // The channel of the last camera, as at boot.
+        s_ap_config.ap.channel = load_channel();
+        error = esp_wifi_set_config(WIFI_IF_AP, &s_ap_config);
+    }
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Could not open the access point: %s",
+                 esp_err_to_name(error));
+        return;
+    }
+    s_ap_suspended = false;
+    ESP_LOGI(TAG, "Access point open again");
+}
+
+void web_ui_suspend_access_point(bool suspend)
+{
+    if (s_lock == NULL || !s_ap_started) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_ap_reopen_wanted = !suspend;
+    if (suspend && !s_ap_suspended) {
+        const esp_err_t error = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (error == ESP_OK) {
+            s_ap_suspended = true;
+            ESP_LOGI(TAG, "Access point closed for the BLE connection setup");
+        } else {
+            ESP_LOGW(TAG, "Could not close the access point: %s",
+                     esp_err_to_name(error));
+        }
+    } else if (!suspend) {
+        reopen_access_point();
+    }
+    xSemaphoreGive(s_lock);
+}
+
 const char *web_ui_ssid(void)
 {
     return s_ssid;
@@ -639,6 +704,7 @@ void web_ui_set_status(const char *phase, const char *ssid,
         s_media_total = 0;
     }
     snprintf(s_phase, sizeof(s_phase), "%s", phase);
+    reopen_access_point();
     snprintf(s_camera_ssid, sizeof(s_camera_ssid), "%s",
              ssid != NULL ? ssid : "");
     s_retry_deadline_us =

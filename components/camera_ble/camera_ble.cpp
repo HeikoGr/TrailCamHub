@@ -63,6 +63,9 @@ static uint8_t s_own_addr_type;
 static bool s_scanning;
 static bool s_connecting;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static camera_ble_link_cb_t s_link_callback;
+// Last state reported to s_link_callback.
+static bool s_link_active;
 static char s_device_name[MAX_BLE_DEVICE_NAME_LEN];
 
 static GattProfile s_profile;
@@ -168,6 +171,29 @@ static void start_scan(void)
     ESP_LOGI(TAG, "Scanning for BLE camera %s", CAMERA_BLE_TARGET_NAME);
 }
 
+// Reports the start and the end of a camera connection, once each.
+static void set_link_active(bool active)
+{
+    if (active == s_link_active) {
+        return;
+    }
+    s_link_active = active;
+    if (s_link_callback != NULL) {
+        s_link_callback(active);
+    }
+}
+
+// Called when a connection attempt or connection has ended. While the stack
+// is released after the activation, the end is reported only by stop_stack(),
+// once the stack's memory is free: opening the access point while the stack
+// still held it failed for lack of internal RAM and crashed the Wi-Fi driver.
+static void connection_ended(void)
+{
+    if (!kReleaseAfterActivation) {
+        set_link_active(false);
+    }
+}
+
 static void disconnect_camera(const char *reason)
 {
     if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
@@ -203,10 +229,12 @@ static void handle_advertisement(const struct ble_gap_disc_desc *disc)
                   "connection");
     ble_gap_disc_cancel();
     s_scanning = false;
+    set_link_active(true);
     int rc = ble_gap_connect(s_own_addr_type, &disc->addr, CONNECT_TIMEOUT_MS,
                              NULL, gap_event_handler, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "Could not connect to BLE device: %d", rc);
+        connection_ended();
         start_scan();
         return;
     }
@@ -472,6 +500,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         if (event->connect.status != 0) {
             ESP_LOGW(TAG, "BLE device connection failed: %d",
                      event->connect.status);
+            connection_ended();
             start_scan();
             break;
         }
@@ -495,6 +524,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_endpoints = CameraEndpoints();
         camera_ble_protocol_reset_response();
+        connection_ended();
         if (s_activation_enabled) {
             ESP_LOGI(TAG, "Restarting scan for %s", CAMERA_BLE_TARGET_NAME);
         }
@@ -534,6 +564,7 @@ static void on_reset(int reason)
     s_scanning = false;
     s_connecting = false;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    connection_ended();
 }
 
 static void host_task(void *arg)
@@ -616,6 +647,8 @@ static void stop_stack(void)
     int rc = nimble_port_stop();
     if (rc != 0) {
         ESP_LOGE(TAG, "Could not stop the BLE host: %d", rc);
+        BleLock lock;
+        set_link_active(false);
         return;
     }
     esp_err_t error = nimble_port_deinit();
@@ -633,6 +666,7 @@ static void stop_stack(void)
     s_connecting = false;
     s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_endpoints = CameraEndpoints();
+    set_link_active(false);
     ESP_LOGI(TAG, "BLE stack released");
 }
 
@@ -660,6 +694,11 @@ esp_err_t camera_ble_start(camera_ble_credentials_cb_t on_credentials)
     ESP_LOGI(TAG, "BLE camera activation ready; target camera is %s",
              CAMERA_BLE_TARGET_NAME);
     return ESP_OK;
+}
+
+void camera_ble_set_link_callback(camera_ble_link_cb_t callback)
+{
+    s_link_callback = callback;
 }
 
 void camera_ble_resume(void)

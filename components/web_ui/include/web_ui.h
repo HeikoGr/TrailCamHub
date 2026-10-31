@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -28,6 +29,15 @@ typedef struct {
  * and started Wi-Fi driver and NVS (for the generated password).
  */
 esp_err_t web_ui_start(const web_ui_callbacks_t *callbacks);
+
+/*
+ * Closes the access point (true) and opens it again (false), for example
+ * while a BLE connection is set up: on the ESP32-C5 a running access point
+ * left the BLE connection setup no air time after it had run for a while.
+ * Clients are disconnected and usually reconnect on their own. Safe to call
+ * from any task; returns quickly.
+ */
+void web_ui_suspend_access_point(bool suspend);
 
 /* Access point name, password and page address; valid after web_ui_start. */
 const char *web_ui_ssid(void);
