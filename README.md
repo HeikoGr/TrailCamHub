@@ -261,6 +261,19 @@ printf 'IDF_PATH=%s\n' "$IDF_PATH"
 idf.py --version
 ```
 
+In a local Dev Container on a Linux host, boards plugged into the host appear in the container as `/dev/ttyACM*` (native USB) or `/dev/ttyUSB*` (USB-UART chips): the container runs privileged and mounts the host's `/dev`, so a board that re-enumerates on reset or in download mode stays reachable. With rootless Docker the container cannot use the host user's groups (such as `dialout`), so the host user has to own the serial devices. A udev rule on the host does that (replace `USER` with the host user name):
+
+```sh
+sudo tee /etc/udev/rules.d/99-esp-serial.rules <<'EOF'
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", OWNER="USER", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", OWNER="USER", MODE="0660"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", OWNER="USER", MODE="0660"
+EOF
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+`303a` is Espressif's native USB, `1a86` and `10c4` are the common CH34x and CP210x USB-UART chips.
+
 `IDF_PATH` should be `/opt/esp/idf`, and the ESP-IDF version should be 5.5.6. Build the firmware with the default VS Code build task **ESP-IDF: Build firmware** (`Ctrl+Shift+B`) or run this command from the repository root:
 
 ```sh
