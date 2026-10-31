@@ -52,7 +52,11 @@ namespace hub_console
 
 void reply(const char *kind, const std::string &message)
 {
-    printf("TCH %s %s\n", kind, message.c_str());
+    if (message.empty()) {
+        printf("TCH %s\n", kind);
+    } else {
+        printf("TCH %s %s\n", kind, message.c_str());
+    }
     fflush(stdout);
 }
 
