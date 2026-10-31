@@ -106,9 +106,9 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/camera_link` | Camera session over UDP: discovery, PRE_LOGIN, PPPP/ARTEMIS packets, ALIVE, heartbeats |
 | `components/sd_storage` | microSD card mount |
 | `components/diagnostics` | Reset reason, core dump status, and heap statistics |
-| `components/session_controller` | Session state machine and the tasks that drive a scan: camera session, then backend uplink |
+| `components/session_controller` | Session state machine and the tasks that drive a scan: camera session, then backend uplink; request and status interface for front ends |
 | `components/hub_config` | Hub settings in NVS (home Wi-Fi, backend URL, device key) with validation |
-| `components/hub_console` | Line-based serial commands (`scan`, `upload`, `config …`) used by the web installer |
+| `components/hub_console` | Line-based serial commands (`scan`, `upload`, `stop`, `config …`) used by the web installer |
 | `components/uplink` | HTTPS sync with the backend: check-in, thumbnail upload, acknowledgement |
 
 Components do not call each other directly. They report events through callbacks to the session controller, which runs them in one task:
@@ -131,6 +131,10 @@ stateDiagram-v2
     UPLINK --> IDLE: sync done
 ```
 
+A stop request ends the cycle early from any state except `UPLINK`: waking the camera, joining a Wi-Fi network and the retry delay are left at once; a running camera session is closed cleanly first; the backend sync is skipped. A sync that is already running finishes.
+
+The controller does not know which front end drives it. Front ends request cycles with `session_controller_request_scan()`, `…_request_upload()` and `…_request_stop()`, and follow the progress through status listeners (`session_controller_add_status_listener()`) or by polling `session_controller_get_status()`: phase, attempt, retry delay, camera SSID and the result of the last cycle. The camera SSID and the result stay set after a cycle ends until the next one starts, so a front end can keep showing them. The serial console is one such front end; a display, a local web UI or a sleep scheduler can use the same interface.
+
 The hub no longer retries forever. It stays **idle** until a scan is requested — over the serial console (for example with **Scan camera now** in the web installer), by the optional automatic scan interval, or once after boot if enabled. A scan wakes the camera over BLE, joins its Wi-Fi and runs the camera session (device info, media list, thumbnails to the SD card). If the camera is not reached, the scan is retried a few times (3 attempts, 10 seconds apart by default) and then given up. After the camera session, and if the uplink settings are complete, the hub joins the home Wi-Fi and syncs with the backend (see [`backend/README.md`](backend/README.md)): one check-in covers every camera stored on the SD card (battery and SD state, and only the recordings the backend does not know yet), then the hub uploads the thumbnails the backend asks for and acknowledges them in one request; the backend's time also sets the hub's clock. Each camera keeps its data in `/sdcard/<camera-id>/` (`camera.json`, `catalog.csv`, `thumb/`), and cameras appear in the backend automatically the first time a hub reports them. **Upload stored data only** runs just that sync.
 
 BLE activation is paused while joining the camera Wi-Fi and during the session, and credentials that arrive later are ignored; by default the BLE stack is released at that point (see the BLE section). Timeouts, attempts, the retry delay, the automatic scan interval and scan-on-boot are configurable in `menuconfig` under **TrailCamHub PoC → Session**. The pure state machine (`session_fsm.cpp`), the command parser and the uplink wire format are covered by host tests. Project options are defined in `main/Kconfig.projbuild` and appear in `menuconfig` under **TrailCamHub PoC**.
@@ -144,6 +148,7 @@ The console UART accepts one command per line; replies and progress are lines st
 | `status` | Current state and settings (secrets hidden) |
 | `scan` | Read the camera, then sync with the backend if configured |
 | `upload` | Sync the data already on the SD card with the backend |
+| `stop` | End the running scan; a running backend sync finishes |
 | `config show` | List settings |
 | `config set <key> <value>` / `config set-hex <key> <hex>` | Store a setting (`wifi_ssid`, `wifi_password`, `api_url`, `device_key`) |
 | `config unset <key>` / `config clear` | Erase one or all settings |

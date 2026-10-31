@@ -35,6 +35,11 @@ std::uint32_t Fsm::attempt() const
     return attempt_;
 }
 
+bool Fsm::stop_pending() const
+{
+    return stop_pending_;
+}
+
 Result Fsm::transition(State next, std::uint32_t actions,
                        std::uint32_t timer_ms, Outcome outcome)
 {
@@ -42,6 +47,7 @@ Result Fsm::transition(State next, std::uint32_t actions,
     state_ = next;
     if (next == State::idle) {
         attempt_ = 0;
+        stop_pending_ = false;
     }
     return result;
 }
@@ -70,6 +76,11 @@ Result Fsm::start_uplink(std::uint32_t actions)
                       config_.wifi_join_timeout_ms);
 }
 
+Result Fsm::stop(std::uint32_t actions)
+{
+    return transition(State::idle, actions, 0, Outcome::stopped);
+}
+
 Result Fsm::handle(Event event)
 {
     switch (state_) {
@@ -94,6 +105,9 @@ Result Fsm::handle(Event event)
         if (event == Event::timeout) {
             return camera_failed(kPauseBle);
         }
+        if (event == Event::stop_requested) {
+            return stop(kCancelTimer | kPauseBle);
+        }
         break;
 
     case State::wifi_join:
@@ -102,6 +116,9 @@ Result Fsm::handle(Event event)
         }
         if (event == Event::wifi_failed || event == Event::timeout) {
             return camera_failed(kCancelTimer | kDisconnectWifi);
+        }
+        if (event == Event::stop_requested) {
+            return stop(kCancelTimer | kDisconnectWifi);
         }
         // Disconnects while joining are retried by the Wi-Fi module.
         break;
@@ -112,7 +129,17 @@ Result Fsm::handle(Event event)
             return {state_, state_, kStopSession | kDisconnectWifi,
                     0,      true,   Outcome::none};
         }
+        if (event == Event::stop_requested) {
+            // The session closes and then reports session_ended.
+            const std::uint32_t actions =
+                stop_pending_ ? kNone : kStopSession | kDisconnectWifi;
+            stop_pending_ = true;
+            return {state_, state_, actions, 0, true, Outcome::none};
+        }
         if (event == Event::session_ended) {
+            if (stop_pending_) {
+                return stop(kDisconnectWifi);
+            }
             // Whatever the session fetched is on the SD card; sync it.
             return camera_done(kDisconnectWifi);
         }
@@ -124,6 +151,9 @@ Result Fsm::handle(Event event)
             return transition(State::ble_activation, kResumeBle | kStartTimer,
                               config_.ble_activation_timeout_ms);
         }
+        if (event == Event::stop_requested) {
+            return stop(kCancelTimer);
+        }
         break;
 
     case State::uplink_join:
@@ -134,6 +164,9 @@ Result Fsm::handle(Event event)
             return transition(State::idle, kCancelTimer | kDisconnectWifi, 0,
                               Outcome::uplink_unreachable);
         }
+        if (event == Event::stop_requested) {
+            return stop(kCancelTimer | kDisconnectWifi);
+        }
         break;
 
     case State::uplink:
@@ -141,7 +174,9 @@ Result Fsm::handle(Event event)
             return transition(State::idle, kDisconnectWifi, 0,
                               Outcome::uplink_done);
         }
-        // A lost connection makes the running uplink fail by itself.
+        // A lost connection makes the running uplink fail by itself. A stop
+        // request is ignored: the sync is the last step of the cycle and
+        // aborting it would leave the backend half updated.
         break;
     }
     return {state_, state_, kNone, 0, false, Outcome::none};
@@ -175,6 +210,8 @@ const char *to_string(Event event)
         return "scan requested";
     case Event::upload_requested:
         return "upload requested";
+    case Event::stop_requested:
+        return "stop requested";
     case Event::credentials_received:
         return "credentials received";
     case Event::wifi_connected:
@@ -206,6 +243,8 @@ const char *to_string(Outcome outcome)
         return "camera-unreachable";
     case Outcome::uplink_unreachable:
         return "uplink-unreachable";
+    case Outcome::stopped:
+        return "stopped";
     }
     return "unknown";
 }

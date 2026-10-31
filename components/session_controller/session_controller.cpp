@@ -1,9 +1,10 @@
 /*
- * This module runs TrailCamHub cycles. Requests (serial console, timer) and
- * module reports (credentials, Wi-Fi changes, session and uplink end,
- * timeouts) go to a queue; a single task feeds them to the session state
- * machine and executes the resulting actions. The camera session and the
- * backend uplink run in their own tasks because they block.
+ * This module runs TrailCamHub cycles. Requests (serial console, timer, other
+ * front ends) and module reports (credentials, Wi-Fi changes, session and
+ * uplink end, timeouts) go to a queue; a single task feeds them to the
+ * session state machine and executes the resulting actions. The camera
+ * session and the backend uplink run in their own tasks because they block.
+ * Status changes are published to the registered listeners.
  */
 
 #include <atomic>
@@ -18,6 +19,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
@@ -85,6 +87,16 @@ esp_ip4_addr_t s_gateway;
 // Settings read when the current cycle started (home Wi-Fi, backend).
 hub_config::Settings s_settings;
 
+// Published status; written by the controller task, read by any task.
+SemaphoreHandle_t s_status_lock;
+session_status_t s_status;
+
+struct Listener {
+    session_status_listener_t callback;
+    void *context;
+};
+Listener s_listeners[SESSION_CONTROLLER_MAX_LISTENERS];
+
 // One "TCH EVENT" line for the web installer and other console clients.
 void console_event(const char *format, ...)
     __attribute__((format(printf, 1, 2)));
@@ -119,6 +131,92 @@ void wipe(void *data, size_t size)
     volatile std::uint8_t *bytes = static_cast<volatile std::uint8_t *>(data);
     for (size_t i = 0; i < size; i++) {
         bytes[i] = 0;
+    }
+}
+
+// --- Status ---
+
+session_phase_t phase_of(session::State state)
+{
+    switch (state) {
+    case session::State::idle:
+        return SESSION_PHASE_IDLE;
+    case session::State::ble_activation:
+        return SESSION_PHASE_CAMERA_WAKE;
+    case session::State::wifi_join:
+        return SESSION_PHASE_CAMERA_WIFI_JOIN;
+    case session::State::session:
+        return SESSION_PHASE_CAMERA_SESSION;
+    case session::State::backoff:
+        return SESSION_PHASE_CAMERA_RETRY_WAIT;
+    case session::State::uplink_join:
+        return SESSION_PHASE_UPLINK_WIFI_JOIN;
+    case session::State::uplink:
+        return SESSION_PHASE_UPLINK;
+    }
+    return SESSION_PHASE_IDLE;
+}
+
+session_result_t result_of(session::Outcome outcome)
+{
+    switch (outcome) {
+    case session::Outcome::none:
+        return SESSION_RESULT_NONE;
+    case session::Outcome::camera_scanned:
+        return SESSION_RESULT_CAMERA_SCANNED;
+    case session::Outcome::uplink_done:
+        return SESSION_RESULT_UPLINK_DONE;
+    case session::Outcome::camera_unreachable:
+        return SESSION_RESULT_CAMERA_UNREACHABLE;
+    case session::Outcome::uplink_unreachable:
+        return SESSION_RESULT_UPLINK_UNREACHABLE;
+    case session::Outcome::stopped:
+        return SESSION_RESULT_STOPPED;
+    }
+    return SESSION_RESULT_NONE;
+}
+
+// Updates the published status after a handled event and tells the
+// listeners. Runs in the controller task only.
+void publish_status(const session::Result &result)
+{
+    session_status_t status;
+    xSemaphoreTake(s_status_lock, portMAX_DELAY);
+    const bool cycle_started = result.previous == session::State::idle &&
+                               result.next != session::State::idle;
+    s_status.phase = phase_of(result.next);
+    s_status.phase_name = session::to_string(result.next);
+    s_status.stopping = s_fsm.stop_pending();
+    s_status.attempt = s_fsm.attempt();
+    s_status.retry_delay_ms =
+        result.next == session::State::backoff ? result.timer_ms : 0;
+    s_status.cycle_finished = result.outcome != session::Outcome::none;
+    if (cycle_started) {
+        s_status.last_result = SESSION_RESULT_NONE;
+        s_status.last_result_name = session::to_string(session::Outcome::none);
+        s_status.camera_ssid[0] = '\0';
+    }
+    if (s_status.cycle_finished) {
+        s_status.last_result = result_of(result.outcome);
+        s_status.last_result_name = session::to_string(result.outcome);
+    }
+    // The SSID belongs to the camera part of the cycle. It stays set after the
+    // cycle ends, so a front end can show it with the result until the next
+    // cycle starts (cleared above).
+    if (result.next == session::State::wifi_join ||
+        result.next == session::State::session) {
+        snprintf(s_status.camera_ssid, sizeof(s_status.camera_ssid), "%s",
+                 s_ssid);
+    }
+    status = s_status;
+    Listener listeners[SESSION_CONTROLLER_MAX_LISTENERS];
+    memcpy(listeners, s_listeners, sizeof(listeners));
+    xSemaphoreGive(s_status_lock);
+
+    for (const Listener &listener : listeners) {
+        if (listener.callback != NULL) {
+            listener.callback(&status, listener.context);
+        }
     }
 }
 
@@ -348,9 +446,6 @@ void controller_task(void *arg)
                      (unsigned)kConfig.max_attempts);
         }
         s_state = result.next;
-        if (result.next != result.previous) {
-            console_event("state %s", session::to_string(result.next));
-        }
         execute(result);
         if (result.actions & session::kConnectCameraWifi) {
             wipe(s_password, sizeof(s_password));
@@ -358,9 +453,9 @@ void controller_task(void *arg)
         if (result.outcome != session::Outcome::none) {
             ESP_LOGI(TAG, "Cycle finished: %s",
                      session::to_string(result.outcome));
-            console_event("done %s", session::to_string(result.outcome));
             diagnostics_log_memory("cycle finished");
         }
+        publish_status(result);
     }
 }
 
@@ -368,6 +463,16 @@ void controller_task(void *arg)
 
 esp_err_t session_controller_init(void)
 {
+    s_status_lock = xSemaphoreCreateMutex();
+    if (s_status_lock == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    s_status.phase = SESSION_PHASE_IDLE;
+    s_status.phase_name = session::to_string(session::State::idle);
+    s_status.max_attempts = kConfig.max_attempts;
+    s_status.last_result = SESSION_RESULT_NONE;
+    s_status.last_result_name = session::to_string(session::Outcome::none);
+
     s_events = xQueueCreate(EVENT_QUEUE_LENGTH, sizeof(QueuedEvent));
     s_session_requests = xQueueCreate(1, sizeof(esp_ip4_addr_t));
     s_uplink_requests = xQueueCreate(1, sizeof(std::uint8_t));
@@ -460,6 +565,56 @@ esp_err_t session_controller_request_upload(void)
     }
     post_event(make_event(session::Event::upload_requested));
     return ESP_OK;
+}
+
+esp_err_t session_controller_request_stop(void)
+{
+    const session::State state = s_state.load();
+    if (s_events == NULL || state == session::State::idle ||
+        state == session::State::uplink) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    post_event(make_event(session::Event::stop_requested));
+    return ESP_OK;
+}
+
+esp_err_t
+session_controller_add_status_listener(session_status_listener_t listener,
+                                       void *context)
+{
+    if (listener == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_status_lock == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t error = ESP_ERR_NO_MEM;
+    xSemaphoreTake(s_status_lock, portMAX_DELAY);
+    for (Listener &slot : s_listeners) {
+        if (slot.callback == NULL) {
+            slot = {listener, context};
+            error = ESP_OK;
+            break;
+        }
+    }
+    xSemaphoreGive(s_status_lock);
+    return error;
+}
+
+void session_controller_get_status(session_status_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    if (s_status_lock == NULL) {
+        *out = {};
+        out->phase_name = session::to_string(session::State::idle);
+        out->last_result_name = session::to_string(session::Outcome::none);
+        return;
+    }
+    xSemaphoreTake(s_status_lock, portMAX_DELAY);
+    *out = s_status;
+    xSemaphoreGive(s_status_lock);
 }
 
 const char *session_controller_state_name(void)

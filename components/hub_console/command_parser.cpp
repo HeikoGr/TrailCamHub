@@ -155,6 +155,9 @@ Command parse_command(const std::string &line)
     if (word == "upload") {
         return simple(CommandType::upload);
     }
+    if (word == "stop") {
+        return simple(CommandType::stop);
+    }
     return invalid("unknown command '" + word + "' (try 'help')");
 }
 
@@ -165,6 +168,8 @@ const char *help_text()
            "backend\n"
            "upload                     sync stored data with the backend "
            "only\n"
+           "stop                       end the running scan (a running "
+           "upload finishes)\n"
            "config show                list settings (secrets hidden)\n"
            "config set <key> <value>   store a setting\n"
            "config set-hex <key> <hex> store a hex-encoded setting\n"
