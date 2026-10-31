@@ -95,27 +95,90 @@ config SD_CARD_ENABLE
     default y
     help
         Mount the FAT file system of the microSD card at /sdcard using the
-        SDMMC peripheral in 1-bit mode. The card is never formatted
-        automatically.
+        SDMMC peripheral or, in SPI mode, an SPI bus. The card is never
+        formatted automatically. On the ESP32-S3 boards the card is used in
+        1-bit SDMMC mode on the GPIOs below; on the ESP32-P4-NANO it uses
+        SDMMC slot 0 in 4-bit mode on its fixed IO MUX pins (CLK GPIO43, CMD
+        GPIO44, D0-D3 GPIO39-42), powered by on-chip LDO channel 4. In SPI
+        mode CLK is the SPI clock, CMD the MOSI and D0 the MISO line.
+
+config SD_CARD_SPI_MODE
+    bool "Use the card in SPI mode" if SOC_SDMMC_HOST_SUPPORTED
+    depends on SD_CARD_ENABLE && !IDF_TARGET_ESP32P4
+    default y if !SOC_SDMMC_HOST_SUPPORTED
+    help
+        Talk to the card over SPI2 instead of SDMMC. Required on chips
+        without an SDMMC host (ESP32-C5). The bus may be shared with other
+        devices such as a display.
 
 config SD_CARD_CLK_GPIO
     int "CLK GPIO"
-    depends on SD_CARD_ENABLE
+    depends on SD_CARD_ENABLE && !IDF_TARGET_ESP32P4
     range 0 48
     default 5
 
 config SD_CARD_CMD_GPIO
     int "CMD GPIO"
-    depends on SD_CARD_ENABLE
+    depends on SD_CARD_ENABLE && !IDF_TARGET_ESP32P4
     range 0 48
     default 4
 
 config SD_CARD_D0_GPIO
     int "D0 GPIO"
-    depends on SD_CARD_ENABLE
+    depends on SD_CARD_ENABLE && !IDF_TARGET_ESP32P4
     range 0 48
     default 6
 
+config SD_CARD_CS_GPIO
+    int "CS GPIO"
+    depends on SD_CARD_SPI_MODE
+    range 0 48
+    default 23
+
+config SD_CARD_LDO_CHANNEL
+    int "On-chip LDO channel powering the card"
+    depends on SD_CARD_ENABLE && IDF_TARGET_ESP32P4
+    range 1 4
+    default 4
+
 endmenu
+
+menu "Log on the SD card"
+    depends on SD_CARD_ENABLE
+
+config SD_LOG_ENABLE
+    bool "Write the log to the SD card"
+    default y
+    help
+        Copy every log line to /sdcard/logs/log-NNNNN.txt, so that a test
+        run can be read afterwards (or live in the web UI) without a serial
+        console. The lines are written about once per second and synced to
+        the card. A new file is started at every boot and when a file
+        reaches the size limit; the oldest files are removed.
+
+config SD_LOG_MAX_FILE_KB
+    int "Maximum size of one log file (KB)"
+    depends on SD_LOG_ENABLE
+    range 64 65536
+    default 4096
+
+config SD_LOG_MAX_FILES
+    int "Log files to keep"
+    depends on SD_LOG_ENABLE
+    range 2 1000
+    default 50
+
+config SD_LOG_BUFFER_KB
+    int "Log buffer in PSRAM (KB)"
+    depends on SD_LOG_ENABLE
+    range 8 1024
+    default 64
+    help
+        Holds the lines until they are written, including the boot messages
+        before the card is mounted. Without PSRAM an 8 KB buffer in internal
+        RAM is used.
+
+endmenu
+
 
 endmenu
