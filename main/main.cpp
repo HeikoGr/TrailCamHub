@@ -11,6 +11,7 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#include "camera_protocol.h"
 #include "hub_console.h"
 #include "sd_card.h"
 #include "session_controller.h"
@@ -38,6 +39,8 @@ extern "C" void app_main(void)
     error = sd_card_mount();
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "Continuing without SD card");
+    } else {
+        camera_protocol_init_storage();
     }
 #endif
 
