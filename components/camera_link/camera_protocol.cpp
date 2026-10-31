@@ -1962,6 +1962,9 @@ static void process_artemis_response(const SessionEvent &event)
                      s_camera_id.c_str(), info.model_name.c_str(),
                      info.fw_version.c_str(), (long long)info.bat_percent,
                      (long long)info.sd_free_mb);
+            if (!camera::store::save_camera_info(info, (int64_t)time(NULL))) {
+                ESP_LOGW(TAG, "Could not store the camera info on the SD card");
+            }
         } else {
             s_camera_id = "unknown";
             ESP_LOGW(TAG, "Could not parse device info; using camera id '%s'",

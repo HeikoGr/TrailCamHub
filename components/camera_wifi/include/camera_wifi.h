@@ -30,5 +30,11 @@ esp_err_t camera_wifi_init(const camera_wifi_callbacks_t *callbacks);
  */
 esp_err_t camera_wifi_connect(const char *ssid, const char *password);
 
-/* Leaves the camera network without retrying. */
+/*
+ * Joins the home network for the backend uplink, with the same retries and
+ * callbacks as camera_wifi_connect(). Only one network is joined at a time.
+ */
+esp_err_t camera_wifi_connect_home(const char *ssid, const char *password);
+
+/* Leaves the current network without retrying. */
 esp_err_t camera_wifi_disconnect(void);

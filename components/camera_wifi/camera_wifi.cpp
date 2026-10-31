@@ -170,8 +170,13 @@ esp_err_t camera_wifi_init(const camera_wifi_callbacks_t *callbacks)
     return ESP_OK;
 }
 
-esp_err_t camera_wifi_connect(const char *ssid, const char *password)
+// Joins `ssid`. The camera access point gets the settings verified on the
+// hardware (any auth mode, no PMF); the home network allows PMF so WPA3
+// transition networks work.
+static esp_err_t connect_network(const char *ssid, const char *password,
+                                 bool home_network)
 {
+    const char *label = home_network ? "home" : "camera";
     if (ssid == NULL || password == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -181,15 +186,15 @@ esp_err_t camera_wifi_connect(const char *ssid, const char *password)
     wifi_config_t wifi_config = {};
     if (ssid_len == 0 || ssid_len > sizeof(wifi_config.sta.ssid) ||
         password_len > sizeof(wifi_config.sta.password)) {
-        ESP_LOGE(TAG,
-                 "Camera Wi-Fi credentials exceed supported field lengths");
+        ESP_LOGE(TAG, "%s Wi-Fi credentials exceed supported field lengths",
+                 label);
         return ESP_ERR_INVALID_SIZE;
     }
 
     memcpy(wifi_config.sta.ssid, ssid, ssid_len);
     memcpy(wifi_config.sta.password, password, password_len);
     wifi_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
-    wifi_config.sta.pmf_cfg.capable = false;
+    wifi_config.sta.pmf_cfg.capable = home_network;
     wifi_config.sta.pmf_cfg.required = false;
 
     s_wifi_connect_retries = 0;
@@ -197,19 +202,30 @@ esp_err_t camera_wifi_connect(const char *ssid, const char *password)
     s_joining = false;
     esp_err_t error = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     memset(&wifi_config, 0, sizeof(wifi_config));
-    ESP_RETURN_ON_ERROR(error, TAG, "Could not set camera Wi-Fi credentials");
+    ESP_RETURN_ON_ERROR(error, TAG, "Could not set %s Wi-Fi credentials",
+                        label);
     s_joining = true;
     s_wifi_connect_requested = true;
     error = esp_wifi_connect();
     if (error != ESP_OK) {
         s_wifi_connect_requested = false;
         s_joining = false;
-        ESP_LOGE(TAG, "Could not start camera Wi-Fi connection: %s",
+        ESP_LOGE(TAG, "Could not start %s Wi-Fi connection: %s", label,
                  esp_err_to_name(error));
         return error;
     }
-    ESP_LOGI(TAG, "Connecting to camera Wi-Fi network \"%s\"", ssid);
+    ESP_LOGI(TAG, "Connecting to %s Wi-Fi network \"%s\"", label, ssid);
     return ESP_OK;
+}
+
+esp_err_t camera_wifi_connect(const char *ssid, const char *password)
+{
+    return connect_network(ssid, password, false);
+}
+
+esp_err_t camera_wifi_connect_home(const char *ssid, const char *password)
+{
+    return connect_network(ssid, password, true);
 }
 
 esp_err_t camera_wifi_disconnect(void)

@@ -13,7 +13,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
+#include "device_info.hpp"
 #include "media_catalog.hpp"
 
 namespace camera::store
@@ -136,5 +138,20 @@ class MediaFileWriter
     std::size_t head_size_ = 0;
     std::uint64_t size_ = 0;
 };
+
+// Path of the stored thumbnail for (dir, num); the file may not exist.
+std::string thumbnail_path(const std::string &camera_id, std::int64_t dir,
+                           std::int64_t num);
+
+// Stores the camera's device info next to its catalog, at
+// /sdcard/<camera-id>/camera.json, together with the time it was read
+// (Unix seconds, 0 = unknown). An upload sends every camera stored this way.
+bool save_camera_info(const camera::artemis::DeviceInfo &info,
+                      std::int64_t read_at);
+bool load_camera_info(const std::string &camera_id,
+                      camera::artemis::DeviceInfo &out, std::int64_t &read_at);
+
+// Ids (sanitized directory names) of all cameras with a camera.json.
+std::vector<std::string> list_cameras();
 
 }  // namespace camera::store

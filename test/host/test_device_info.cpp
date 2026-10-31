@@ -60,3 +60,23 @@ TEST_CASE("json_find_string handles quotes, escapes and scoping")
     CHECK_FALSE(json_find_string("{\"n\":123}", "n", s));      // not a string
     CHECK_FALSE(json_find_string("{\"n\":\"abc\"}", "x", s));  // absent
 }
+
+TEST_CASE("serialize_device_info round-trips through parse_device_info")
+{
+    camera::artemis::DeviceInfo info;
+    info.dev_id = "F4:C1:56:06:ED:3B";
+    info.model_name = "Wi-Fi \"Trail\" Cam";
+    info.fw_version = "2.3.0.3";
+    info.bat_percent = 78;
+    info.sd_free_mb = 28412;
+
+    camera::artemis::DeviceInfo parsed;
+    REQUIRE(camera::artemis::parse_device_info(
+        camera::artemis::serialize_device_info(info), parsed));
+    CHECK(parsed.dev_id == info.dev_id);
+    CHECK(parsed.model_name == info.model_name);
+    CHECK(parsed.fw_version == "2.3.0.3");
+    CHECK(parsed.bat_percent == 78);
+    CHECK(parsed.sd_total_mb == -1);
+    CHECK(parsed.sd_free_mb == 28412);
+}

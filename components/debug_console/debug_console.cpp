@@ -140,8 +140,10 @@ bool file_in_use(const std::string &path)
 bool session_writing()
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    const bool writing =
-        strcmp(s_phase, "connecting") == 0 || strcmp(s_phase, "connected") == 0;
+    // The backend sync reads the files.
+    const bool writing = strcmp(s_phase, "connecting") == 0 ||
+                         strcmp(s_phase, "connected") == 0 ||
+                         strcmp(s_phase, "uploading") == 0;
     xSemaphoreGive(s_lock);
     return writing;
 }

@@ -46,7 +46,8 @@ const char *web_ui_url(void);
 
 /*
  * Reports the camera workflow status shown on the page. `phase` is one of
- * "idle", "searching", "connecting", "connected", "retry_wait", "finished";
+ * "idle", "searching", "connecting", "connected", "retry_wait", "uploading",
+ * "finished";
  * `ssid` may be empty. Safe to call from any task.
  */
 void web_ui_set_status(const char *phase, const char *ssid,

@@ -55,7 +55,8 @@ jobs:
           source "$IDF_PATH/export.sh"
           defaults="sdkconfig.defaults${BOARD_DEFAULTS:+;$BOARD_DEFAULTS}"
           # Dev image: default profile, verbose (INFO) logging.
-          idf.py -D IDF_TARGET="$TARGET" -D SDKCONFIG_DEFAULTS="$defaults" build
+          .github/scripts/run-annotated.sh "Firmware build" \
+            idf.py -D IDF_TARGET="$TARGET" -D SDKCONFIG_DEFAULTS="$defaults" build
           idf.py merge-bin -o "trailcamhub-$BOARD-dev.bin"
           # Release image: size-optimized, warnings-only logging.
           idf.py -B build-release \
@@ -124,8 +125,8 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S test/host -B build-host -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build-host --parallel
-          ctest --test-dir build-host --output-on-failure
+          .github/scripts/run-annotated.sh "Host test build" cmake --build build-host --parallel
+          .github/scripts/run-annotated.sh "Host tests" ctest --test-dir build-host --output-on-failure
 
       - name: Check the dongle screenshots
         shell: bash
@@ -194,6 +195,22 @@ jobs:
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # The Telegram Mini App shares the Pages site with the installer (/app/).
+      - name: Build Telegram Mini App
+        shell: bash
+        working-directory: app
+        env:
+          VITE_API_BASE_URL: ${{ vars.TRAILCAMHUB_API_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json ]]; then npm ci; else npm install --no-audit --no-fund; fi
+          VITE_APP_VERSION="${GITHUB_SHA:0:7}" npm run build
 
       - name: Download firmware package
         uses: actions/download-artifact@v8
@@ -265,9 +282,10 @@ jobs:
 
           # Assemble the published site: page assets + all stored builds.
           mkdir -p site
-          cp web/index.html web/styles.css web/serial-console.js web/installer.js site/
+          cp web/*.html web/*.css web/*.js site/
           cp store/versions.json site/
           cp -r store/builds site/builds
+          cp -r app/dist site/app
 
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5

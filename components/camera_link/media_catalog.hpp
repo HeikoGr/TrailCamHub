@@ -34,6 +34,7 @@ class MediaCatalog
         kVideoRequested = 1u << 1,  // the user asked for this item's full video
         kFileDownloaded = 1u << 2,  // the full photo/video is on the SD card
         kVideoUploaded = 1u << 3,   // the full video was uploaded to the cloud
+        kReported = 1u << 4,  // the backend knows this item (check-in accepted)
     };
 
     // Adds entries from a freshly fetched list. Existing entries (matched by
@@ -55,6 +56,10 @@ class MediaCatalog
     // Items whose full file is not stored yet, photos before videos; each
     // kind is included only if selected.
     std::vector<CatalogEntry> missing_downloads(bool photos, bool videos) const;
+    // Up to `limit` items without `flag`, in catalog order.
+    std::vector<CatalogEntry> without_flag(Flag flag, std::size_t limit) const;
+    // Clears `flag` on every item (e.g. to report everything again).
+    void clear_flag_everywhere(Flag flag);
 
     const std::vector<CatalogEntry> &entries() const
     {

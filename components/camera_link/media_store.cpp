@@ -9,6 +9,7 @@
 #include <time.h>
 #include <utime.h>
 
+#include "artemis_json.hpp"
 #include "esp_log.h"
 #include "sd_card.h"
 
@@ -116,10 +117,7 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
     const std::string thumbs = base + "/thumb";
     if (!ensure_dir(thumbs))
         return false;
-    char name[48];
-    snprintf(name, sizeof(name), "/%lld_%lld.jpg", (long long)dir,
-             (long long)num);
-    const std::string path = thumbs + name;
+    const std::string path = thumbnail_path(camera_id, dir, num);
     if (!write_file(path, jpeg, size))
         return false;
     // Set the file's timestamps to the recording time so the thumbnail dates
@@ -270,6 +268,65 @@ std::string MediaFileWriter::part_path() const
     // With a fixed extension several files of one item can be open at once.
     return extension_.empty() ? base_ + ".part"
                               : base_ + "." + extension_ + ".part";
+}
+
+std::string thumbnail_path(const std::string &camera_id, std::int64_t dir,
+                           std::int64_t num)
+{
+    char name[48];
+    snprintf(name, sizeof(name), "/thumb/%lld_%lld.jpg", (long long)dir,
+             (long long)num);
+    return camera_dir(camera_id) + name;
+}
+
+bool save_camera_info(const camera::artemis::DeviceInfo &info,
+                      std::int64_t read_at)
+{
+    const std::string dir = camera_dir(info.dev_id);
+    if (!ensure_dir(dir))
+        return false;
+    std::string text = camera::artemis::serialize_device_info(info);
+    // Append the read time as one more field of the same flat object.
+    // A clock before 2024 has not been set yet (no uplink since boot).
+    constexpr std::int64_t kClockValidFrom = 1704067200;
+    text.insert(text.size() - 1,
+                ",\"readAt\":" +
+                    std::to_string(read_at >= kClockValidFrom ? read_at : 0));
+    return write_file(dir + "/camera.json", text.data(), text.size());
+}
+
+bool load_camera_info(const std::string &camera_id,
+                      camera::artemis::DeviceInfo &out, std::int64_t &read_at)
+{
+    std::string text;
+    read_at = 0;
+    if (!read_file(camera_dir(camera_id) + "/camera.json", text) ||
+        !camera::artemis::parse_device_info(text, out)) {
+        return false;
+    }
+    camera::artemis::json_find_int(text, "readAt", read_at);
+    return true;
+}
+
+std::vector<std::string> list_cameras()
+{
+    std::vector<std::string> ids;
+    DIR *root = opendir(SD_CARD_MOUNT_POINT);
+    if (root == nullptr)
+        return ids;
+    struct dirent *entry;
+    while ((entry = readdir(root)) != nullptr) {
+        const std::string name = entry->d_name;
+        if (name.empty() || name[0] == '.')
+            continue;
+        struct stat info;
+        const std::string marker =
+            std::string(SD_CARD_MOUNT_POINT) + "/" + name + "/camera.json";
+        if (stat(marker.c_str(), &info) == 0)
+            ids.push_back(name);
+    }
+    closedir(root);
+    return ids;
 }
 
 }  // namespace camera::store

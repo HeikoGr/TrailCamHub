@@ -125,3 +125,36 @@ TEST_CASE("parse rejects an unknown header and skips malformed rows")
     REQUIRE(cat2.parse(text));
     CHECK(cat2.size() == 2);
 }
+
+TEST_CASE("without_flag and clear_flag_everywhere support delta reporting")
+{
+    camera::artemis::MediaCatalog catalog;
+    camera::artemis::MediaList list;
+    for (int num = 1; num <= 4; ++num) {
+        camera::artemis::MediaItem item;
+        item.dir_num = 100;
+        item.num = num;
+        list.files.push_back(item);
+    }
+    catalog.merge(list);
+    using Flag = camera::artemis::MediaCatalog;
+
+    std::vector<camera::artemis::CatalogEntry> batch =
+        catalog.without_flag(Flag::kReported, 3);
+    REQUIRE(batch.size() == 3);
+    for (const auto &e : batch)
+        catalog.set_flag(e.dir_num, e.media_num, Flag::kReported);
+
+    batch = catalog.without_flag(Flag::kReported, 3);
+    REQUIRE(batch.size() == 1);
+    CHECK(batch[0].media_num == 4);
+
+    // Flags survive a save/load round trip.
+    camera::artemis::MediaCatalog reloaded;
+    REQUIRE(reloaded.parse(catalog.serialize()));
+    CHECK(reloaded.count_with_flag(Flag::kReported) == 3);
+
+    reloaded.clear_flag_everywhere(Flag::kReported);
+    CHECK(reloaded.count_with_flag(Flag::kReported) == 0);
+    CHECK(reloaded.without_flag(Flag::kReported, 10).size() == 4);
+}

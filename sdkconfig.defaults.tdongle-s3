@@ -5,8 +5,8 @@
 
 CONFIG_BOARD_TDONGLE_S3=y
 
-# Searching starts with a press of the button.
-# CONFIG_SESSION_AUTO_START is not set
+# Searching starts with a press of the button (CONFIG_SESSION_SCAN_ON_BOOT and
+# the automatic scan interval are off by default).
 
 # No PSRAM on this board: keep everything in internal RAM.
 # CONFIG_SPIRAM is not set

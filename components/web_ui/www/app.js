@@ -8,6 +8,7 @@ const PHASES = {
   connecting: ["CONNECTING", "busy", "Joining the camera Wi-Fi."],
   connected: ["CONNECTED", "ok", "Session running."],
   retry_wait: ["NO LINK", "warn", ""],
+  uploading: ["UPLOADING", "busy", "Syncing with the backend over the home Wi-Fi."],
   finished: ["FINISHED", "ok", ""],
 };
 
@@ -95,7 +96,9 @@ async function refreshStatus() {
     $("uptime").textContent = duration(s.uptime_s);
     $("ap").textContent = s.ap;
     activeLog = s.log;
-    const busy = ["searching", "connecting", "connected"].includes(s.phase);
+    const busy = ["searching", "connecting", "connected", "uploading"].includes(
+      s.phase,
+    );
     $("search").disabled = busy;
     $("stop").disabled = s.phase === "idle";
   } catch (e) {

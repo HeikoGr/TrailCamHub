@@ -6,8 +6,8 @@
 
 CONFIG_BOARD_TDONGLE_C5=y
 
-# Searching starts with a press of the button.
-# CONFIG_SESSION_AUTO_START is not set
+# Searching starts with a press of the button (CONFIG_SESSION_SCAN_ON_BOOT and
+# the automatic scan interval are off by default).
 
 # Console: the native USB port (USB-Serial-JTAG) is the only serial link.
 # CONFIG_ESP_CONSOLE_UART_DEFAULT is not set

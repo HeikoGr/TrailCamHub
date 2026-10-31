@@ -1,0 +1,186 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  One-time setup so GitHub Actions can deploy the TrailCamHub backend via OIDC,
+  without stored AWS keys. Deploy this stack once by hand (see backend/README.md).
+  It creates an artifact bucket, a CloudFormation execution role limited to
+  resources named after the backend stack, and the role GitHub Actions assumes.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Default: ThomasPohl/TrailCamHub
+    Description: owner/repo allowed to deploy (case-sensitive).
+  DeployBranch:
+    Type: String
+    Default: main
+  BackendStackName:
+    Type: String
+    Default: trailcamhub
+    AllowedPattern: '^[a-z][a-z0-9-]*$'
+    Description: >-
+      Name of the backend stack (lower case). All its resources start with this
+      prefix; the execution role is limited to it.
+  CreateOidcProvider:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+    Description: >-
+      Set to false if the account already has the GitHub OIDC provider
+      (token.actions.githubusercontent.com).
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, 'true']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-packages
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # Assumed by CloudFormation while it creates/updates the backend stack.
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: backend-resources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DynamoDB
+                Effect: Allow
+                Action: dynamodb:*
+                Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${BackendStackName}-*'
+              - Sid: S3Buckets
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${BackendStackName}-*'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${BackendStackName}-*/*'
+              - Sid: ReadPackages
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: Lambda
+                Effect: Allow
+                Action: lambda:*
+                Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${BackendStackName}-*'
+              - Sid: FunctionRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${BackendStackName}-*'
+              - Sid: LogGroups
+                Effect: Allow
+                Action: logs:*
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${BackendStackName}-*'
+              - Sid: Describe
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - lambda:GetFunctionUrlConfig
+                Resource: '*'
+
+  # Assumed by GitHub Actions (main branch only) through OIDC.
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubRepository}:ref:refs/heads/${DeployBranch}'
+      Policies:
+        - PolicyName: deploy-backend
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Stack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:ListStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${BackendStackName}/*'
+              - Sid: SamTransform
+                Effect: Allow
+                Action: cloudformation:CreateChangeSet
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31'
+              - Sid: Validate
+                Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: '*'
+              - Sid: Packages
+                Effect: Allow
+                Action: [s3:PutObject, s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: PassExecutionRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationExecutionRole.Arn
+
+Outputs:
+  DeployRoleArn:
+    Description: Repository variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt GitHubDeployRole.Arn
+  CloudFormationExecutionRoleArn:
+    Description: Repository variable AWS_CFN_EXECUTION_ROLE_ARN
+    Value: !GetAtt CloudFormationExecutionRole.Arn
+  ArtifactBucketName:
+    Description: Repository variable AWS_SAM_ARTIFACT_BUCKET
+    Value: !Ref ArtifactBucket

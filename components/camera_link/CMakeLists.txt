@@ -6,13 +6,14 @@ idf_component_register(SRCS "camera_protocol.cpp" "camera_prelogin.cpp"
                             "artemis_login.cpp" "artemis_reassembler.cpp"
                             "media_list.cpp" "media_transfer.cpp"
                             "bulk_reassembler.cpp" "bulk_stream.cpp"
-                            "frame_reorder.cpp" "playback_decoder.cpp" "playback_record.cpp"
-                            "playback_stream.cpp"
-                            "device_info.cpp"
-                            "media_catalog.cpp" "media_store.cpp" "sd_writer.cpp"
+                            "device_info.cpp" "frame_reorder.cpp"
+                            "media_catalog.cpp" "media_store.cpp"
+                            "playback_decoder.cpp" "playback_record.cpp"
+                            "playback_stream.cpp" "sd_writer.cpp"
                             "task_load.cpp"
-                       INCLUDE_DIRS "include"
-                       PRIV_INCLUDE_DIRS "."
+                       # "." exposes the pure protocol/catalog headers to the
+                       # uplink component.
+                       INCLUDE_DIRS "include" "."
                        REQUIRES esp_netif
                        PRIV_REQUIRES esp_app_format esp_ringbuf esp_timer esp_wifi lwip mbedtls
                                      sd_storage)

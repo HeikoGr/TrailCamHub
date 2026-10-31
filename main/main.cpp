@@ -3,9 +3,10 @@
  * persistent storage, the SD card and the network stack (with the Ethernet
  * uplink on boards that have one), brings the firmware of a Wi-Fi/BLE
  * co-processor up to date, starts the web UI and the dongle display where
- * enabled, as well as the serial command console, then hands over to the
- * session controller, which runs the camera workflow. The BLE stack is
- * started by the camera BLE module when it is needed.
+ * enabled, then starts the session controller, which runs a camera/uplink
+ * cycle when one is requested, and the serial consoles, which accept those
+ * requests and the hub settings. The BLE stack is started by the camera BLE
+ * module when it is needed.
  */
 
 #include "esp_err.h"
@@ -21,6 +22,7 @@
 #include "debug_console.h"
 #include "dongle_ui.h"
 #include "ethernet_uplink.h"
+#include "hub_console.h"
 #include "sd_card.h"
 #include "sd_log.h"
 #include "session_controller.h"
@@ -57,6 +59,8 @@ static void on_session_status(const session_status_info_t *info)
             phase = DONGLE_UI_CONNECTING;
             break;
         case SESSION_STATUS_CONNECTED:
+        // The display has no screen of its own for the backend sync yet.
+        case SESSION_STATUS_UPLOADING:
             phase = DONGLE_UI_CONNECTED;
             break;
         case SESSION_STATUS_RETRY_WAIT:
@@ -86,6 +90,9 @@ static void on_session_status(const session_status_info_t *info)
             break;
         case SESSION_STATUS_RETRY_WAIT:
             phase = "retry_wait";
+            break;
+        case SESSION_STATUS_UPLOADING:
+            phase = "uploading";
             break;
         case SESSION_STATUS_FINISHED:
             phase = "finished";
@@ -236,4 +243,13 @@ extern "C" void app_main(void)
         ESP_LOGE(TAG, "Could not start the session controller: %s",
                  esp_err_to_name(error));
     }
+
+#if CONFIG_ESP_CONSOLE_UART
+    // Settings, scans and uploads for the web installer, on a UART console.
+    error = hub_console_start();
+    if (error != ESP_OK) {
+        ESP_LOGE(TAG, "Could not start the serial console: %s",
+                 esp_err_to_name(error));
+    }
+#endif
 }

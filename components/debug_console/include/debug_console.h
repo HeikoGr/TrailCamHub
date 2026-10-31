@@ -31,8 +31,9 @@ esp_err_t debug_console_start(const debug_console_callbacks_t *callbacks);
 
 /*
  * Reports the camera workflow status, with the phases of web_ui_set_status().
- * Files cannot be deleted while the phase is "connecting" or "connected",
- * because the camera session may be writing them. Safe to call from any task.
+ * Files cannot be deleted while the phase is "connecting", "connected" or
+ * "uploading", because the camera session may be writing them or the backend
+ * sync reading them. Safe to call from any task.
  */
 void debug_console_set_status(const char *phase, const char *ssid,
                               uint32_t retry_delay_ms);

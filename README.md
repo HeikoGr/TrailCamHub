@@ -85,8 +85,8 @@ Still to verify on hardware: ESP-Hosted transport and BLE scanning through the C
 
 The **LilyGO T-Dongle-S3** is a USB stick with an ESP32-S3 (16 MB flash, no PSRAM), a 0.96" ST7735 display (160x80), a button on the back (GPIO0, the BOOT button) and a microSD slot. It has no uplink of its own; it is meant for testing the camera workflow on the bench. The firmware is built for the `esp32s3` target with `sdkconfig.defaults.tdongle-s3` on top of the common defaults, which enables `CONFIG_BOARD_TDONGLE_S3` and adapts the configuration:
 
-- **No automatic search.** `CONFIG_SESSION_AUTO_START` is off: after boot the dongle waits until the button is pressed. Failed attempts are still retried with the increasing delay until the user stops them; after a session that did all its work the dongle shows *FINISHED* instead of connecting to the camera again.
-- **Button.** A short press starts the search for the camera (BLE scan, Wi-Fi enable, Wi-Fi join); during a retry delay it starts the next attempt at once. Holding the button for 1.5 s stops searching or ends the running session and returns to idle.
+- **No automatic search.** `CONFIG_SESSION_SCAN_ON_BOOT` and the automatic scan interval are off: after boot the dongle waits until the button is pressed. A scan tries the camera up to `CONFIG_SESSION_MAX_ATTEMPTS` times and then returns to idle; after a cycle that did its work the dongle shows *FINISHED*.
+- **Button.** A short press starts a scan (BLE scan, Wi-Fi enable, Wi-Fi join, camera session, then the backend sync if configured); while a cycle runs it is ignored. Holding the button for 1.5 s stops the cycle (except a running backend sync) and returns to idle.
 - **Display.** The `dongle_ui` component shows only the current phase: a coloured title (*READY*, *SEARCHING*, *CONNECTING*, *CONNECTED*, *NO LINK*, *FINISHED*), the camera Wi-Fi name once the camera has reported it, the download progress (*Saving media n/m*, *Saved n of m files*), the countdown to the next attempt, and a hint for the button; with the [web UI](#web-ui), the idle and finished screens also show its network name, password and address. Content is redrawn only when it changes. The screen content (`status_screen.cpp`) and its drawing (`screen_renderer.cpp`, `font5x7.cpp`) have no ESP-IDF dependencies and are host-tested.
 - **No PSRAM.** PSRAM is disabled and the NimBLE host allocates from internal RAM.
 - **Console** on the native USB port (USB-Serial-JTAG).
@@ -234,24 +234,51 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/sd_log` | Copy of the log output in text files on the SD card |
 | `components/diagnostics` | Reset reason, core dump status, and heap statistics |
 | `components/debug_console` | Commands on the USB-Serial-JTAG console: search/stop, status, SD card files |
-| `components/session_controller` | Session state machine and the task that drives the camera workflow |
+| `components/session_controller` | Session state machine and the tasks that drive a scan: camera session, then backend uplink |
+| `components/hub_config` | Hub settings in NVS (home Wi-Fi, backend URL, device key) with validation |
+| `components/hub_console` | Line-based serial commands (`scan`, `upload`, `config …`) used by the web installer |
+| `components/uplink` | HTTPS sync with the backend: check-in, thumbnail upload, acknowledgement |
 
 Components do not call each other directly. They report events through callbacks to the session controller, which runs them in one task:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> BLE_ACTIVATION: start
+    [*] --> IDLE
+    IDLE --> BLE_ACTIVATION: scan requested
+    IDLE --> UPLINK_JOIN: upload requested
     BLE_ACTIVATION --> WIFI_JOIN: credentials received
-    WIFI_JOIN --> SESSION: Wi-Fi connected
-    BLE_ACTIVATION --> BACKOFF: activation timeout
+    BLE_ACTIVATION --> BACKOFF: timeout
+    WIFI_JOIN --> SESSION: camera Wi-Fi connected
     WIFI_JOIN --> BACKOFF: join timeout / Wi-Fi failed
-    SESSION --> BACKOFF: session ended (camera CLOSE, error, Wi-Fi lost)
     BACKOFF --> BLE_ACTIVATION: retry delay elapsed
+    BACKOFF --> IDLE: attempts used up
+    SESSION --> UPLINK_JOIN: session ended, uplink configured
+    SESSION --> IDLE: session ended, no uplink
+    UPLINK_JOIN --> UPLINK: home Wi-Fi connected
+    UPLINK_JOIN --> IDLE: join timeout / Wi-Fi failed
+    UPLINK --> IDLE: sync done
 ```
 
-The BLE activation (scan, connect, credentials) has a timeout of 120 s (`CONFIG_SESSION_BLE_ACTIVATION_TIMEOUT_S`); then BLE is released and the controller retries after the retry delay. Before, an activation whose scan could not be started (`Could not start BLE scan: 519`, the controller's "Memory Capacity Exceeded") waited forever, and a search request during it was ignored; a search request now starts the activation over. At the end of a session `camera_protocol_run()` frees the buffers of its containers (catalog, queues, reassemblers): their allocations are below `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` (16 KB) and so in internal RAM, and after a stopped session they held about 14 KB of it. The next BLE activation then found about 4 KB instead of 12 KB free, its scan failed, and stopping the half-started controller crashed (`esp_bt_controller_deinit`).
+The hub no longer retries forever. It stays **idle** until a scan is requested — over the serial console (for example with **Scan camera now** in the web installer), by the optional automatic scan interval, or once after boot if enabled. A scan wakes the camera over BLE, joins its Wi-Fi and runs the camera session (device info, media list, thumbnails to the SD card). If the camera is not reached, the scan is retried a few times (3 attempts, 10 seconds apart by default) and then given up. After the camera session, and if the uplink settings are complete, the hub joins the home Wi-Fi and syncs with the backend (see [`backend/README.md`](backend/README.md)): one check-in covers every camera stored on the SD card (battery and SD state, and only the recordings the backend does not know yet), then the hub uploads the thumbnails the backend asks for and acknowledges them in one request; the backend's time also sets the hub's clock. Each camera keeps its data in `/sdcard/<camera-id>/` (`camera.json`, `catalog.csv`, `thumb/`), and cameras appear in the backend automatically the first time a hub reports them. **Upload stored data only** runs just that sync.
 
-BLE activation is paused while joining the camera Wi-Fi and during the session, and credentials that arrive later are ignored; by default the BLE stack is released at that point (see the BLE section). After a failure the controller leaves the camera network, waits, and activates the camera over BLE again. The retry delay starts at 5 seconds and doubles up to 60 seconds; it is reset once a session is reached. The Wi-Fi join timeout (30 seconds) and the retry delays are configurable in `menuconfig` under **TrailCamHub PoC → Session**. The pure state machine (`session_fsm.cpp`) is covered by host tests. Project options are defined in `main/Kconfig.projbuild` and appear in `menuconfig` under **TrailCamHub PoC**.
+At the end of a session `camera_protocol_run()` frees the buffers of its containers (catalog, queues, reassemblers): their allocations are below `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` (16 KB) and so in internal RAM, and after a stopped session they held about 14 KB of it. The next BLE activation then found about 4 KB instead of 12 KB free, its scan failed, and stopping the half-started controller crashed (`esp_bt_controller_deinit`).
+
+BLE activation is paused while joining the camera Wi-Fi and during the session, and credentials that arrive later are ignored; by default the BLE stack is released at that point (see the BLE section). Timeouts, attempts, the retry delay, the automatic scan interval and scan-on-boot are configurable in `menuconfig` under **TrailCamHub PoC → Session**. The pure state machine (`session_fsm.cpp`), the command parser and the uplink wire format are covered by host tests. Project options are defined in `main/Kconfig.projbuild` and appear in `menuconfig` under **TrailCamHub PoC**.
+
+#### Serial commands
+
+The console UART accepts one command per line; replies and progress are lines starting with `TCH`:
+
+| Command | Effect |
+|---|---|
+| `status` | Current state and settings (secrets hidden) |
+| `scan` | Read the camera, then sync with the backend if configured |
+| `upload` | Sync the data already on the SD card with the backend |
+| `config show` | List settings |
+| `config set <key> <value>` / `config set-hex <key> <hex>` | Store a setting (`wifi_ssid`, `wifi_password`, `api_url`, `device_key`) |
+| `config unset <key>` / `config clear` | Erase one or all settings |
+
+The settings live in NVS on the hub. The web installer's **Device setup** panel uses exactly these commands.
 
 #### Host tests
 
@@ -339,7 +366,13 @@ Use a desktop Chromium-based browser with Web Serial support, such as current Go
 
 The manual merged image and its SHA-256 checksum are also available on the installer page. Alternatively, download the `trailcamhub-esp32s3` artifact from a successful GitHub Actions run and follow its deployment instructions.
 
+After installing, the **Device setup** panel connects to the hub over the same USB serial port. It stores the home Wi-Fi, backend URL and device key on the hub (passwords and keys are written only, never read back), and has buttons to start a scan or an upload-only sync and to watch their progress.
+
 The installer does not configure the camera name or Wi-Fi-enable payload. It installs the default CI build, which sends `BT_KEY_ON` to request Wi-Fi activation after BLE discovery. Do not install firmware unless you trust its source, and use the installer only with a board you are authorized to modify.
+
+### Phone App (Telegram Mini App)
+
+The phone UI lives in [`app/`](app/README.md): a React web app that runs as a Telegram Mini App and is published on the same GitHub Pages site under **https://thomaspohl.github.io/TrailCamHub/app/**. It shows camera status and thumbnails and lets users request video downloads. Until the backend exists it runs in demo mode with sample data. The **App** workflow lints, tests and builds it on pull requests.
 
 ## Reliability and Security
 
