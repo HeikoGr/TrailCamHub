@@ -53,7 +53,11 @@ typedef struct {
     uint32_t max_attempts;
     /* Delay until the next attempt in SESSION_PHASE_CAMERA_RETRY_WAIT. */
     uint32_t retry_delay_ms;
-    /* Camera Wi-Fi name once the camera reported it in this cycle. */
+    /*
+     * Camera Wi-Fi name once the camera reported it in this cycle. Kept after
+     * the cycle ends and cleared when the next cycle starts; empty for an
+     * upload-only cycle.
+     */
     char camera_ssid[33];
     /* True only on the update that ends a cycle. */
     bool cycle_finished;

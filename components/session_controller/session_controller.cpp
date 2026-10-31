@@ -200,13 +200,13 @@ void publish_status(const session::Result &result)
         s_status.last_result = result_of(result.outcome);
         s_status.last_result_name = session::to_string(result.outcome);
     }
-    // The SSID belongs to the camera part of the cycle.
+    // The SSID belongs to the camera part of the cycle. It stays set after the
+    // cycle ends, so a front end can show it with the result until the next
+    // cycle starts (cleared above).
     if (result.next == session::State::wifi_join ||
         result.next == session::State::session) {
         snprintf(s_status.camera_ssid, sizeof(s_status.camera_ssid), "%s",
                  s_ssid);
-    } else if (result.next == session::State::idle) {
-        s_status.camera_ssid[0] = '\0';
     }
     status = s_status;
     Listener listeners[SESSION_CONTROLLER_MAX_LISTENERS];
