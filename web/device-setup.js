@@ -40,6 +40,7 @@
     "uplink-done": "Scan and upload finished",
     "camera-unreachable": "Camera not reached",
     "uplink-unreachable": "Home Wi-Fi not reached",
+    stopped: "Scan stopped",
   };
 
   const serial = () => window.trailcamSerial;
@@ -172,6 +173,8 @@
         const [event, ...details] = rest;
         if (event === "state") {
           showState(details[0]);
+        } else if (event === "stopping") {
+          addLog("event", "Stopping — closing the camera session");
         } else if (event === "done") {
           addLog(details[0].endsWith("unreachable") ? "error" : "ok", DONE_TEXT[details[0]] ?? details[0]);
         } else {

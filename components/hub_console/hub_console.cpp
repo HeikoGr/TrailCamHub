@@ -1,7 +1,8 @@
 /*
  * Reads commands from the console UART and executes them: settings are
- * stored through hub_config, scans and uploads are handed to the session
- * controller, which reports their progress as "TCH EVENT" lines.
+ * stored through hub_config, scans, uploads and stops are handed to the
+ * session controller. The controller's status changes are printed as
+ * "TCH EVENT" lines for the web installer and other console clients.
  */
 
 #include "hub_console.h"
@@ -29,12 +30,38 @@
 namespace
 {
 
+// Last phase printed; only touched by the session controller task.
+session_phase_t s_printed_phase = SESSION_PHASE_IDLE;
+bool s_printed_stopping = false;
+
 const char *TAG = "trailcamhub_console";
 
 void reply(const char *kind, const std::string &message)
 {
     printf("TCH %s %s\n", kind, message.c_str());
     fflush(stdout);
+}
+
+void event(const std::string &message)
+{
+    reply("EVENT", message);
+}
+
+// Status listener: one line per phase change, stop and finished cycle.
+void on_status(const session_status_t *status, void *context)
+{
+    (void)context;
+    if (status->phase != s_printed_phase) {
+        s_printed_phase = status->phase;
+        event(std::string("state ") + status->phase_name);
+    }
+    if (status->stopping && !s_printed_stopping) {
+        event("stopping");
+    }
+    s_printed_stopping = status->stopping;
+    if (status->cycle_finished) {
+        event(std::string("done ") + status->last_result_name);
+    }
 }
 
 void print_settings()
@@ -125,6 +152,18 @@ void execute(const hub_console::Command &command)
     case CommandType::upload:
         request_cycle(session_controller_request_upload(), "upload");
         break;
+    case CommandType::stop: {
+        const esp_err_t error = session_controller_request_stop();
+        if (error == ESP_OK) {
+            reply("OK", "stop requested");
+        } else if (error == ESP_ERR_INVALID_STATE) {
+            reply("ERR", std::string("nothing to stop (") +
+                             session_controller_state_name() + ")");
+        } else {
+            reply("ERR", std::string("stop failed: ") + esp_err_to_name(error));
+        }
+        break;
+    }
     case CommandType::config_show:
         print_settings();
         break;
@@ -187,6 +226,15 @@ esp_err_t hub_console_start(void)
     }
     uart_vfs_dev_port_set_rx_line_endings(port, ESP_LINE_ENDINGS_CRLF);
     uart_vfs_dev_use_driver(port);
+
+    session_status_t status;
+    session_controller_get_status(&status);
+    s_printed_phase = status.phase;
+    error = session_controller_add_status_listener(on_status, NULL);
+    if (error != ESP_OK) {
+        ESP_LOGW(TAG, "Could not follow the session status: %s",
+                 esp_err_to_name(error));
+    }
 
     if (xTaskCreate(console_task, "hub_console", CONSOLE_TASK_STACK, NULL,
                     CONSOLE_TASK_PRIORITY, NULL) != pdPASS) {

@@ -11,6 +11,7 @@
  *   TCH ERR <message>         command rejected
  *   TCH CONFIG <key> <value>  one setting (secrets hidden)
  *   TCH STATE <state> ...     controller state
- *   TCH EVENT <name> ...      asynchronous progress (from the controller)
+ *   TCH EVENT <name> ...      asynchronous progress: "state <STATE>",
+ *                             "stopping", "done <result>", "uplink ..."
  */
 esp_err_t hub_console_start(void);

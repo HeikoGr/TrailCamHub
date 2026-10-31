@@ -13,6 +13,7 @@ TEST_CASE("simple commands")
     CHECK(parse_command("  upload \r\n").type == CommandType::upload);
     CHECK(parse_command("status").type == CommandType::status);
     CHECK(parse_command("help").type == CommandType::help);
+    CHECK(parse_command("stop\r\n").type == CommandType::stop);
     CHECK(parse_command("tch scan").type == CommandType::scan);
     CHECK(parse_command("").type == CommandType::empty);
     CHECK(parse_command("   \r\n").type == CommandType::empty);

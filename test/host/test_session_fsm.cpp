@@ -192,4 +192,119 @@ TEST_CASE("state, event and outcome names")
     CHECK(std::string(to_string(Event::scan_requested)) == "scan requested");
     CHECK(std::string(to_string(Outcome::camera_unreachable)) ==
           "camera-unreachable");
+    CHECK(std::string(to_string(Event::stop_requested)) == "stop requested");
+    CHECK(std::string(to_string(Outcome::stopped)) == "stopped");
+}
+
+TEST_CASE("a stop request in idle is ignored")
+{
+    Fsm fsm(kConfig);
+    CHECK_FALSE(fsm.handle(Event::stop_requested).handled);
+    CHECK(fsm.state() == State::idle);
+}
+
+TEST_CASE("stop while waking the camera returns to idle")
+{
+    Fsm fsm(kConfig);
+    fsm.set_uplink_enabled(true);
+    fsm.handle(Event::scan_requested);
+
+    const Result result = fsm.handle(Event::stop_requested);
+    CHECK(result.next == State::idle);
+    CHECK(has(result, kCancelTimer));
+    CHECK(has(result, kPauseBle));
+    CHECK(result.outcome == Outcome::stopped);
+    CHECK(fsm.attempt() == 0);
+}
+
+TEST_CASE("stop while joining the camera Wi-Fi disconnects")
+{
+    Fsm fsm(kConfig);
+    fsm.handle(Event::scan_requested);
+    fsm.handle(Event::credentials_received);
+
+    const Result result = fsm.handle(Event::stop_requested);
+    CHECK(result.next == State::idle);
+    CHECK(has(result, kCancelTimer));
+    CHECK(has(result, kDisconnectWifi));
+    CHECK(result.outcome == Outcome::stopped);
+}
+
+TEST_CASE("stop during the camera session waits for its end, then skips "
+          "the uplink")
+{
+    Fsm fsm(kConfig);
+    fsm.set_uplink_enabled(true);
+    reach_session(fsm);
+
+    Result result = fsm.handle(Event::stop_requested);
+    CHECK(result.handled);
+    CHECK(result.next == State::session);
+    CHECK(has(result, kStopSession));
+    CHECK(has(result, kDisconnectWifi));
+    CHECK(result.outcome == Outcome::none);
+    CHECK(fsm.stop_pending());
+
+    // A second request does not repeat the actions.
+    result = fsm.handle(Event::stop_requested);
+    CHECK(result.handled);
+    CHECK(result.actions == kNone);
+
+    result = fsm.handle(Event::session_ended);
+    CHECK(result.next == State::idle);
+    CHECK_FALSE(has(result, kConnectHomeWifi));
+    CHECK(result.outcome == Outcome::stopped);
+    CHECK_FALSE(fsm.stop_pending());
+}
+
+TEST_CASE("stop during the retry delay ends the cycle")
+{
+    Fsm fsm(kConfig);
+    fsm.handle(Event::scan_requested);
+    REQUIRE(fsm.handle(Event::timeout).next == State::backoff);
+
+    const Result result = fsm.handle(Event::stop_requested);
+    CHECK(result.next == State::idle);
+    CHECK(has(result, kCancelTimer));
+    CHECK(result.outcome == Outcome::stopped);
+}
+
+TEST_CASE("stop while joining the home Wi-Fi ends the cycle")
+{
+    Fsm fsm(kConfig);
+    fsm.set_uplink_enabled(true);
+    reach_session(fsm);
+    REQUIRE(fsm.handle(Event::session_ended).next == State::uplink_join);
+
+    const Result result = fsm.handle(Event::stop_requested);
+    CHECK(result.next == State::idle);
+    CHECK(has(result, kCancelTimer));
+    CHECK(has(result, kDisconnectWifi));
+    CHECK(result.outcome == Outcome::stopped);
+}
+
+TEST_CASE("a running backend sync is not interrupted by a stop request")
+{
+    Fsm fsm(kConfig);
+    fsm.set_uplink_enabled(true);
+    reach_session(fsm);
+    fsm.handle(Event::session_ended);
+    REQUIRE(fsm.handle(Event::wifi_connected).next == State::uplink);
+
+    CHECK_FALSE(fsm.handle(Event::stop_requested).handled);
+    const Result result = fsm.handle(Event::uplink_done);
+    CHECK(result.next == State::idle);
+    CHECK(result.outcome == Outcome::uplink_done);
+}
+
+TEST_CASE("a new scan after a stop starts fresh")
+{
+    Fsm fsm(kConfig);
+    reach_session(fsm);
+    fsm.handle(Event::stop_requested);
+    fsm.handle(Event::session_ended);
+
+    reach_session(fsm);
+    CHECK_FALSE(fsm.stop_pending());
+    CHECK(fsm.handle(Event::session_ended).outcome == Outcome::camera_scanned);
 }

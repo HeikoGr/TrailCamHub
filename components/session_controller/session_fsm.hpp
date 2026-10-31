@@ -5,7 +5,13 @@
 // joins its Wi-Fi, runs the UDP session and - if an uplink is configured -
 // joins the home Wi-Fi and syncs with the backend. Failed camera attempts are
 // retried a bounded number of times; afterwards the hub returns to idle and
-// reports the outcome. An "upload only" request skips the camera part.
+// reports the outcome. An "upload only" request skips the camera part. A stop
+// request ends the camera part of a running cycle early and returns to idle
+// without the backend sync; a running sync is not interrupted.
+//
+// Who requests cycles and what happens after them (sleep, staying awake for
+// a local UI) is up to the application; the state machine is the same for
+// all of them.
 //
 // It only decides; the controller executes the returned actions. This module
 // has no ESP-IDF dependencies so it can be unit-tested on the host.
@@ -28,6 +34,7 @@ enum class State : std::uint8_t {
 enum class Event : std::uint8_t {
     scan_requested,
     upload_requested,
+    stop_requested,
     credentials_received,
     wifi_connected,
     wifi_disconnected,
@@ -60,6 +67,7 @@ enum class Outcome : std::uint8_t {
     uplink_done,         // camera session (if any) and uplink done
     camera_unreachable,  // all camera attempts failed
     uplink_unreachable,  // the home Wi-Fi could not be joined
+    stopped,             // ended early by a stop request
 };
 
 struct Config {
@@ -100,6 +108,10 @@ class Fsm
     // Camera attempt within the current cycle (1-based; 0 when idle).
     std::uint32_t attempt() const;
 
+    // True between a stop request during the camera session and the end of
+    // that session (the session needs a moment to close cleanly).
+    bool stop_pending() const;
+
   private:
     Result transition(State next, std::uint32_t actions,
                       std::uint32_t timer_ms = 0,
@@ -107,11 +119,13 @@ class Fsm
     Result camera_failed(std::uint32_t actions);
     Result camera_done(std::uint32_t actions);
     Result start_uplink(std::uint32_t actions);
+    Result stop(std::uint32_t actions);
 
     Config config_;
     State state_{State::idle};
     bool uplink_enabled_{false};
     std::uint32_t attempt_{0};
+    bool stop_pending_{false};
 };
 
 const char *to_string(State state);
