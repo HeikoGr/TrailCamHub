@@ -1,14 +1,17 @@
 /**
- * Draft of the TrailCamHub API v1 as seen by the app.
+ * TrailCamHub API v1 as seen by the app (see backend/README.md).
  *
- * The backend (AWS) does not exist yet; these types are the contract the app
- * is written against. Field names follow the camera protocol where possible
+ * A user sees every camera of the hubs linked to them; one hub can serve
+ * several cameras. Field names follow the camera protocol where possible
  * (`dir`/`num` = mediaDirNum/mediaNum, `mediaTime` in Unix seconds).
  */
 
 export interface Camera {
   camId: string;
   name: string;
+  /** The TrailCamHub module that reads this camera. */
+  hubId: string;
+  hubName: string;
   model: string;
   firmware: string;
   /** Camera battery in percent (cmdId 512). */
@@ -17,7 +20,7 @@ export interface Camera {
   sdFreeMB: number;
   /** Battery of the TrailCamHub module itself, in percent; absent if unknown. */
   hubBatPercent?: number;
-  /** Last successful check-in, Unix seconds. */
+  /** When the hub last read the camera, Unix seconds. */
   lastSeen: number;
 }
 

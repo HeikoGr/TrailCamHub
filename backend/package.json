@@ -14,7 +14,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "register-camera": "node scripts/register-camera.mjs"
+    "register-hub": "node scripts/register-hub.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.850.0",

@@ -1,15 +1,33 @@
 import type { ApiClient, Camera, CommandResult, MediaItem } from './types';
 
-const DEMO_CAMERA: Camera = {
-  camId: 'F4C15606ED3B',
-  name: 'Garden',
-  model: 'TC100',
-  firmware: '2.3.0.3',
-  batPercent: 78,
-  sdFreeMB: 28_412,
-  hubBatPercent: 91,
-  lastSeen: 0,
-};
+const DEMO_HUB = { hubId: 'garden-hub', hubName: 'Garden hub', hubBatPercent: 91 };
+
+const DEMO_CAMERAS: Array<Camera & { firstNum: number; minutesAgo: number }> = [
+  {
+    ...DEMO_HUB,
+    camId: 'F4C15606ED3B',
+    name: 'Garden',
+    model: 'TC100',
+    firmware: '2.3.0.3',
+    batPercent: 78,
+    sdFreeMB: 28_412,
+    lastSeen: 0,
+    firstNum: 36,
+    minutesAgo: 17,
+  },
+  {
+    ...DEMO_HUB,
+    camId: 'A1B2C3D4E5F6',
+    name: 'Meadow',
+    model: 'TC100',
+    firmware: '2.3.0.3',
+    batPercent: 22,
+    sdFreeMB: 9_870,
+    lastSeen: 0,
+    firstNum: 12,
+    minutesAgo: 19,
+  },
+];
 
 /** Night-vision style placeholder thumbnail, so the demo needs no binary assets. */
 export function placeholderThumb(label: string, hue: number): string {
@@ -26,10 +44,10 @@ export function placeholderThumb(label: string, hue: number): string {
 }
 
 /** Photo + video pairs, newest first, as the TC100 reports them (DCIM 100). */
-export function buildDemoMedia(now: number, count = 12): MediaItem[] {
+export function buildDemoMedia(now: number, count = 12, firstNum = 36): MediaItem[] {
   const items: MediaItem[] = [];
   for (let i = 0; i < count; i++) {
-    const num = 36 - i;
+    const num = firstNum - i;
     const mediaTime = now - i * 5_400 - 600;
     const isVideo = i % 2 === 1;
     items.push({
@@ -50,30 +68,35 @@ export function buildDemoMedia(now: number, count = 12): MediaItem[] {
  */
 export class DemoApiClient implements ApiClient {
   readonly isDemo = true;
-  private readonly media: MediaItem[];
+  private readonly media = new Map<string, MediaItem[]>();
   private nextCommandId = 1;
 
   constructor(
     private readonly now: () => number = () => Math.floor(Date.now() / 1000),
     private readonly latencyMs = 250,
   ) {
-    this.media = buildDemoMedia(this.now());
+    for (const camera of DEMO_CAMERAS) {
+      this.media.set(camera.camId, buildDemoMedia(this.now(), 12, camera.firstNum));
+    }
   }
 
   async listCameras(): Promise<Camera[]> {
     await this.delay();
-    return [{ ...DEMO_CAMERA, lastSeen: this.now() - 17 * 60 }];
+    return DEMO_CAMERAS.map(({ firstNum: _firstNum, minutesAgo, ...camera }) => {
+      void _firstNum;
+      return { ...camera, lastSeen: this.now() - minutesAgo * 60 };
+    });
   }
 
   async listMedia(camId: string): Promise<MediaItem[]> {
     await this.delay();
-    return camId === DEMO_CAMERA.camId ? this.media.map((m) => ({ ...m })) : [];
+    return (this.media.get(camId) ?? []).map((m) => ({ ...m }));
   }
 
   async requestVideo(camId: string, item: Pick<MediaItem, 'dir' | 'num'>): Promise<CommandResult> {
     await this.delay();
-    const target = this.media.find((m) => m.dir === item.dir && m.num === item.num);
-    if (camId !== DEMO_CAMERA.camId || !target) {
+    const target = this.media.get(camId)?.find((m) => m.dir === item.dir && m.num === item.num);
+    if (!target) {
       throw new Error(`Unknown media ${item.dir}_${item.num}`);
     }
     if (target.videoState === 'none' || target.videoState === 'failed') {

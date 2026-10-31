@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { DemoApiClient } from './api/demo';
 import type { ApiClient } from './api/types';
@@ -13,10 +13,43 @@ describe('App', () => {
     render(<App api={demoApi()} now={() => NOW} />);
 
     expect(await screen.findByRole('heading', { name: 'Garden' })).toBeInTheDocument();
-    expect(screen.getByText('78 %')).toBeInTheDocument();
-    expect(screen.getByText('Seen 17 min ago')).toBeInTheDocument();
+    const status = screen.getByRole('region', { name: 'Status of Garden' });
+    expect(within(status).getByText('78 %')).toBeInTheDocument();
+    expect(within(status).getByText('Seen 17 min ago')).toBeInTheDocument();
     expect(screen.getByRole('note')).toHaveTextContent('Demo mode');
-    expect(screen.getAllByRole('img', { name: /Recording 100_/ })).toHaveLength(12);
+    expect(await screen.findAllByRole('img', { name: /Recording 100_/ })).toHaveLength(12);
+  });
+
+  it('switches between cameras and remembers the choice', async () => {
+    render(<App api={demoApi()} now={() => NOW} />);
+
+    const garden = await screen.findByRole('button', { name: /Garden/ });
+    expect(garden).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/via Garden hub/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Meadow/ }));
+    expect(await screen.findByRole('heading', { name: 'Meadow' })).toBeInTheDocument();
+    expect(await screen.findAllByRole('img', { name: /Recording 100_12/ })).toHaveLength(1);
+    expect(screen.queryByRole('img', { name: /Recording 100_36/ })).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('trailcamhub.camera')).toBe('A1B2C3D4E5F6');
+
+    // A new session opens the remembered camera.
+    cleanup();
+    render(<App api={demoApi()} now={() => NOW} />);
+    expect(await screen.findByRole('heading', { name: 'Meadow' })).toBeInTheDocument();
+  });
+
+  it('hides the picker with a single camera', async () => {
+    const api = demoApi();
+    const single: ApiClient = {
+      isDemo: false,
+      listCameras: async () => (await api.listCameras()).slice(0, 1),
+      listMedia: (id) => api.listMedia(id),
+      requestVideo: (id, item) => api.requestVideo(id, item),
+    };
+    render(<App api={single} now={() => NOW} />);
+    expect(await screen.findByRole('heading', { name: 'Garden' })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'Cameras' })).not.toBeInTheDocument();
   });
 
   it('greets the Telegram user', async () => {

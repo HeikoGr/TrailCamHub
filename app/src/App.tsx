@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiClient } from './api';
 import type { Camera, MediaItem } from './api/types';
+import { CameraPicker } from './components/CameraPicker';
 import { MediaDetail } from './components/MediaDetail';
 import { MediaGrid } from './components/MediaGrid';
 import { StatusCard } from './components/StatusCard';
@@ -16,32 +17,86 @@ interface Props {
 type Load =
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; camera: Camera | undefined; media: MediaItem[] };
+  | { status: 'ready'; cameras: Camera[] };
+
+type MediaLoad =
+  | { status: 'idle' | 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ready'; camId: string; items: MediaItem[] };
 
 const unixNow = () => Math.floor(Date.now() / 1000);
+const CAMERA_KEY = 'trailcamhub.camera';
+
+// The last viewed camera is a per-device convenience; storage may be blocked.
+function rememberedCamera(): string | undefined {
+  try {
+    return window.localStorage.getItem(CAMERA_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function rememberCamera(camId: string): void {
+  try {
+    window.localStorage.setItem(CAMERA_KEY, camId);
+  } catch {
+    // Not important enough to report.
+  }
+}
+
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export function App({ api, webApp, now = unixNow }: Props) {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
+  const [camId, setCamId] = useState<string>();
+  const [media, setMedia] = useState<MediaLoad>({ status: 'idle' });
   const [selectedKey, setSelectedKey] = useState<string>();
   const [busy, setBusy] = useState(false);
+  // Ignores answers for a camera the user has already switched away from.
+  const mediaRequest = useRef(0);
   const inTelegram = isInTelegram(webApp);
   const user = getUser(webApp);
+
+  const loadMedia = useCallback(
+    async (id: string) => {
+      const request = ++mediaRequest.current;
+      setMedia({ status: 'loading' });
+      try {
+        const items = await api.listMedia(id);
+        if (request === mediaRequest.current) setMedia({ status: 'ready', camId: id, items });
+      } catch (error) {
+        if (request === mediaRequest.current)
+          setMedia({ status: 'error', message: message(error) });
+      }
+    },
+    [api],
+  );
 
   const refresh = useCallback(async () => {
     setLoad({ status: 'loading' });
     try {
       const cameras = await api.listCameras();
-      const camera = cameras[0];
-      const media = camera ? await api.listMedia(camera.camId) : [];
-      setLoad({ status: 'ready', camera, media });
+      setLoad({ status: 'ready', cameras });
+      const remembered = rememberedCamera();
+      const initial = cameras.find((c) => c.camId === remembered) ?? cameras[0];
+      setCamId(initial?.camId);
+      if (initial) await loadMedia(initial.camId);
     } catch (error) {
-      setLoad({ status: 'error', message: error instanceof Error ? error.message : String(error) });
+      setLoad({ status: 'error', message: message(error) });
     }
-  }, [api]);
+  }, [api, loadMedia]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const selectCamera = (id: string) => {
+    if (id === camId) return;
+    setCamId(id);
+    setSelectedKey(undefined);
+    rememberCamera(id);
+    void loadMedia(id);
+  };
 
   const goBack = useCallback(() => setSelectedKey(undefined), []);
 
@@ -58,27 +113,33 @@ export function App({ api, webApp, now = unixNow }: Props) {
     };
   }, [inTelegram, webApp, selectedKey, goBack]);
 
+  const camera = load.status === 'ready' ? load.cameras.find((c) => c.camId === camId) : undefined;
+  const items = media.status === 'ready' && media.camId === camId ? media.items : undefined;
+  const selected = items?.find((m) => mediaKey(m) === selectedKey);
+
   const requestVideo = async (item: MediaItem) => {
-    if (load.status !== 'ready' || !load.camera) return;
+    if (!camera || media.status !== 'ready') return;
+    const target = camera.camId;
     setBusy(true);
     try {
-      await api.requestVideo(load.camera.camId, item);
-      setLoad({
-        ...load,
-        media: load.media.map((m) =>
-          mediaKey(m) === mediaKey(item) ? { ...m, videoState: 'requested' } : m,
-        ),
-      });
+      await api.requestVideo(target, item);
+      setMedia((current) =>
+        current.status === 'ready' && current.camId === target
+          ? {
+              ...current,
+              items: current.items.map((m) =>
+                mediaKey(m) === mediaKey(item) ? { ...m, videoState: 'requested' } : m,
+              ),
+            }
+          : current,
+      );
       hapticSuccess(webApp);
     } catch (error) {
-      notify(`Request failed: ${error instanceof Error ? error.message : String(error)}`, webApp);
+      notify(`Request failed: ${message(error)}`, webApp);
     } finally {
       setBusy(false);
     }
   };
-
-  const selected =
-    load.status === 'ready' ? load.media.find((m) => mediaKey(m) === selectedKey) : undefined;
 
   return (
     <div className="app">
@@ -104,13 +165,14 @@ export function App({ api, webApp, now = unixNow }: Props) {
         </div>
       )}
 
-      {load.status === 'ready' && !load.camera && (
+      {load.status === 'ready' && load.cameras.length === 0 && (
         <p className="hint empty">
-          No camera linked yet. Scan the QR code on your TrailCamHub to add one.
+          No camera yet. Cameras appear here after your TrailCamHub has read them for the first
+          time.
         </p>
       )}
 
-      {load.status === 'ready' && load.camera && selected && (
+      {camera && selected && (
         <MediaDetail
           item={selected}
           busy={busy}
@@ -120,11 +182,25 @@ export function App({ api, webApp, now = unixNow }: Props) {
         />
       )}
 
-      {load.status === 'ready' && load.camera && !selected && (
+      {load.status === 'ready' && camera && !selected && (
         <>
-          <StatusCard camera={load.camera} now={now()} />
+          <CameraPicker cameras={load.cameras} selected={camera.camId} onSelect={selectCamera} />
+          <StatusCard camera={camera} now={now()} />
           <h2 className="section-title">Recordings</h2>
-          <MediaGrid items={load.media} onSelect={(item) => setSelectedKey(mediaKey(item))} />
+          {media.status === 'loading' && <p className="hint">Loading recordings…</p>}
+          {media.status === 'error' && (
+            <div className="card error" role="alert">
+              <p>Could not load recordings: {media.message}</p>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => void loadMedia(camera.camId)}
+              >
+                Try again
+              </button>
+            </div>
+          )}
+          {items && <MediaGrid items={items} onSelect={(item) => setSelectedKey(mediaKey(item))} />}
         </>
       )}
 

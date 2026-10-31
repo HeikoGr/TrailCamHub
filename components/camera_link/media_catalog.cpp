@@ -97,6 +97,25 @@ std::vector<CatalogEntry> MediaCatalog::pending_video_requests() const
     return out;
 }
 
+std::vector<CatalogEntry> MediaCatalog::without_flag(Flag flag,
+                                                     std::size_t limit) const
+{
+    std::vector<CatalogEntry> out;
+    for (const CatalogEntry &e : entries_) {
+        if (out.size() >= limit)
+            break;
+        if ((e.flags & static_cast<std::uint32_t>(flag)) == 0)
+            out.push_back(e);
+    }
+    return out;
+}
+
+void MediaCatalog::clear_flag_everywhere(Flag flag)
+{
+    for (CatalogEntry &e : entries_)
+        e.flags &= ~static_cast<std::uint32_t>(flag);
+}
+
 std::size_t MediaCatalog::count_with_flag(Flag flag) const
 {
     std::size_t n = 0;

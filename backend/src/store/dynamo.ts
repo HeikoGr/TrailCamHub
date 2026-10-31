@@ -4,19 +4,23 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  TransactWriteCommand,
   UpdateCommand,
   type QueryCommandInput,
 } from '@aws-sdk/lib-dynamodb';
-import type { CameraRecord, CommandRecord, MediaRecord, VideoState } from '../model';
-import type { Store, Telemetry } from './types';
+import type { CameraRecord, CommandRecord, HubRecord, MediaRecord, VideoState } from '../model';
+import type { CameraTelemetry, HubTelemetry, Store } from './types';
 
 /*
  * Single-table layout (PK / SK):
- *   CAM#<camId>  / META                   camera record
- *   USER#<id>    / CAM#<camId>            user ↔ camera link
+ *   HUB#<hubId>  / META                   hub record
+ *   HUB#<hubId>  / CAM#<camId>            hub → camera (listing)
+ *   USER#<id>    / HUB#<hubId>            user ↔ hub link
+ *   CAM#<camId>  / META                   camera record (with hubId)
  *   CAM#<camId>  / MEDIA#<dir>#<num>      media (zero-padded, sorts by file)
  *   CAM#<camId>  / CMD#<id>               command
  */
+const hubPk = (hubId: string) => `HUB#${hubId}`;
 const camPk = (camId: string) => `CAM#${camId}`;
 const userPk = (userId: number) => `USER#${userId}`;
 const mediaSk = (dir: number, num: number) =>
@@ -28,6 +32,13 @@ function strip<T>(item: Record<string, unknown>): T {
   void _pk;
   void _sk;
   return rest as T;
+}
+
+function isConditionFailure(error: unknown): boolean {
+  if (error instanceof ConditionalCheckFailedException) return true;
+  // Transactions report failed conditions as cancellation reasons.
+  const reasons = (error as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons;
+  return Array.isArray(reasons) && reasons.some((r) => r.Code === 'ConditionalCheckFailed');
 }
 
 export class DynamoStore implements Store {
@@ -42,78 +53,97 @@ export class DynamoStore implements Store {
     });
   }
 
-  async putCamera(camera: CameraRecord): Promise<void> {
+  // ---- Hubs ----------------------------------------------------------------
+
+  async putHub(hub: HubRecord): Promise<void> {
     await this.db.send(
-      new PutCommand({
-        TableName: this.table,
-        Item: { PK: camPk(camera.camId), SK: 'META', ...camera },
-      }),
+      new PutCommand({ TableName: this.table, Item: { PK: hubPk(hub.hubId), SK: 'META', ...hub } }),
     );
+  }
+
+  async getHub(hubId: string): Promise<HubRecord | undefined> {
+    return this.getItem<HubRecord>(hubPk(hubId), 'META');
+  }
+
+  async updateHub(hubId: string, telemetry: HubTelemetry, lastSeen: number): Promise<void> {
+    await this.updateFields(hubPk(hubId), 'META', { ...telemetry, lastSeen });
+  }
+
+  // ---- Cameras -------------------------------------------------------------
+
+  async claimCamera(camId: string, hubId: string) {
+    const camera: CameraRecord = { camId, hubId, name: camId, lastSeen: 0 };
+    try {
+      await this.db.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: this.table,
+                Item: { PK: camPk(camId), SK: 'META', ...camera },
+                ConditionExpression: 'attribute_not_exists(PK)',
+              },
+            },
+            {
+              Put: {
+                TableName: this.table,
+                Item: { PK: hubPk(hubId), SK: `CAM#${camId}`, camId },
+              },
+            },
+          ],
+        }),
+      );
+      return { camera, created: true };
+    } catch (error) {
+      if (!isConditionFailure(error)) throw error;
+    }
+    const existing = await this.getCamera(camId);
+    if (!existing) throw new Error(`Camera ${camId} vanished while claiming it`);
+    return { camera: existing, created: false };
   }
 
   async getCamera(camId: string): Promise<CameraRecord | undefined> {
-    const { Item } = await this.db.send(
-      new GetCommand({ TableName: this.table, Key: { PK: camPk(camId), SK: 'META' } }),
-    );
-    return Item ? strip<CameraRecord>(Item) : undefined;
+    return this.getItem<CameraRecord>(camPk(camId), 'META');
   }
 
-  async updateTelemetry(camId: string, telemetry: Telemetry, lastSeen: number): Promise<void> {
-    const fields: Record<string, unknown> = { ...telemetry, lastSeen };
-    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
-    await this.db.send(
-      new UpdateCommand({
-        TableName: this.table,
-        Key: { PK: camPk(camId), SK: 'META' },
-        ConditionExpression: 'attribute_exists(PK)',
-        UpdateExpression: 'SET ' + entries.map((_, i) => `#f${i} = :v${i}`).join(', '),
-        ExpressionAttributeNames: Object.fromEntries(entries.map(([key], i) => [`#f${i}`, key])),
-        ExpressionAttributeValues: Object.fromEntries(
-          entries.map(([, value], i) => [`:v${i}`, value]),
-        ),
-      }),
-    );
+  async updateCamera(camId: string, telemetry: CameraTelemetry, lastSeen: number): Promise<void> {
+    await this.updateFields(camPk(camId), 'META', { ...telemetry, lastSeen });
   }
 
-  async linkUser(userId: number, camId: string): Promise<void> {
-    await this.db.send(
-      new PutCommand({
-        TableName: this.table,
-        Item: { PK: userPk(userId), SK: `CAM#${camId}`, camId },
-      }),
-    );
-  }
-
-  async listUserCameraIds(userId: number): Promise<string[]> {
-    const items = await this.queryAll({
-      TableName: this.table,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-      ExpressionAttributeValues: { ':pk': userPk(userId), ':sk': 'CAM#' },
-    });
+  async listHubCameraIds(hubId: string): Promise<string[]> {
+    const items = await this.queryPrefix(hubPk(hubId), 'CAM#');
     return items.map((item) => String(item.camId));
   }
 
-  async isLinked(userId: number, camId: string): Promise<boolean> {
-    const { Item } = await this.db.send(
-      new GetCommand({ TableName: this.table, Key: { PK: userPk(userId), SK: `CAM#${camId}` } }),
+  // ---- Users ---------------------------------------------------------------
+
+  async linkUser(userId: number, hubId: string): Promise<void> {
+    await this.db.send(
+      new PutCommand({
+        TableName: this.table,
+        Item: { PK: userPk(userId), SK: `HUB#${hubId}`, hubId },
+      }),
     );
-    return Item !== undefined;
   }
 
+  async listUserHubIds(userId: number): Promise<string[]> {
+    const items = await this.queryPrefix(userPk(userId), 'HUB#');
+    return items.map((item) => String(item.hubId));
+  }
+
+  async isLinked(userId: number, hubId: string): Promise<boolean> {
+    return (await this.getItem(userPk(userId), `HUB#${hubId}`)) !== undefined;
+  }
+
+  // ---- Media ---------------------------------------------------------------
+
   async listMedia(camId: string): Promise<MediaRecord[]> {
-    const items = await this.queryAll({
-      TableName: this.table,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-      ExpressionAttributeValues: { ':pk': camPk(camId), ':sk': 'MEDIA#' },
-    });
+    const items = await this.queryPrefix(camPk(camId), 'MEDIA#');
     return items.map((item) => strip<MediaRecord>(item));
   }
 
   async getMedia(camId: string, dir: number, num: number): Promise<MediaRecord | undefined> {
-    const { Item } = await this.db.send(
-      new GetCommand({ TableName: this.table, Key: { PK: camPk(camId), SK: mediaSk(dir, num) } }),
-    );
-    return Item ? strip<MediaRecord>(Item) : undefined;
+    return this.getItem<MediaRecord>(camPk(camId), mediaSk(dir, num));
   }
 
   async addMedia(camId: string, items: MediaRecord[]): Promise<void> {
@@ -127,18 +157,20 @@ export class DynamoStore implements Store {
           }),
         );
       } catch (error) {
-        if (!(error instanceof ConditionalCheckFailedException)) throw error;
+        if (!isConditionFailure(error)) throw error;
       }
     }
   }
 
   async markThumbPresent(camId: string, dir: number, num: number): Promise<void> {
-    await this.updateIfExists(camId, mediaSk(dir, num), 'thumbPresent', true);
+    await this.updateIfExists(camPk(camId), mediaSk(dir, num), 'thumbPresent', true);
   }
 
   async setVideoState(camId: string, dir: number, num: number, state: VideoState): Promise<void> {
-    await this.updateIfExists(camId, mediaSk(dir, num), 'videoState', state);
+    await this.updateIfExists(camPk(camId), mediaSk(dir, num), 'videoState', state);
   }
+
+  // ---- Commands ------------------------------------------------------------
 
   async putCommand(camId: string, command: CommandRecord): Promise<void> {
     await this.db.send(
@@ -150,27 +182,45 @@ export class DynamoStore implements Store {
   }
 
   async getCommand(camId: string, id: string): Promise<CommandRecord | undefined> {
-    const { Item } = await this.db.send(
-      new GetCommand({ TableName: this.table, Key: { PK: camPk(camId), SK: cmdSk(id) } }),
-    );
-    return Item ? strip<CommandRecord>(Item) : undefined;
+    return this.getItem<CommandRecord>(camPk(camId), cmdSk(id));
   }
 
   async listCommands(camId: string): Promise<CommandRecord[]> {
-    const items = await this.queryAll({
-      TableName: this.table,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-      ExpressionAttributeValues: { ':pk': camPk(camId), ':sk': 'CMD#' },
-    });
+    const items = await this.queryPrefix(camPk(camId), 'CMD#');
     return items.map((item) => strip<CommandRecord>(item)).sort((a, b) => a.created - b.created);
   }
 
-  private async updateIfExists(camId: string, sk: string, field: string, value: unknown) {
+  // ---- Helpers -------------------------------------------------------------
+
+  private async getItem<T>(pk: string, sk: string): Promise<T | undefined> {
+    const { Item } = await this.db.send(
+      new GetCommand({ TableName: this.table, Key: { PK: pk, SK: sk } }),
+    );
+    return Item ? strip<T>(Item) : undefined;
+  }
+
+  private async updateFields(pk: string, sk: string, fields: Record<string, unknown>) {
+    const entries = Object.entries(fields).filter(([, value]) => value !== undefined);
+    await this.db.send(
+      new UpdateCommand({
+        TableName: this.table,
+        Key: { PK: pk, SK: sk },
+        ConditionExpression: 'attribute_exists(PK)',
+        UpdateExpression: 'SET ' + entries.map((_, i) => `#f${i} = :v${i}`).join(', '),
+        ExpressionAttributeNames: Object.fromEntries(entries.map(([key], i) => [`#f${i}`, key])),
+        ExpressionAttributeValues: Object.fromEntries(
+          entries.map(([, value], i) => [`:v${i}`, value]),
+        ),
+      }),
+    );
+  }
+
+  private async updateIfExists(pk: string, sk: string, field: string, value: unknown) {
     try {
       await this.db.send(
         new UpdateCommand({
           TableName: this.table,
-          Key: { PK: camPk(camId), SK: sk },
+          Key: { PK: pk, SK: sk },
           ConditionExpression: 'attribute_exists(PK)',
           UpdateExpression: 'SET #f = :v',
           ExpressionAttributeNames: { '#f': field },
@@ -178,11 +228,16 @@ export class DynamoStore implements Store {
         }),
       );
     } catch (error) {
-      if (!(error instanceof ConditionalCheckFailedException)) throw error;
+      if (!isConditionFailure(error)) throw error;
     }
   }
 
-  private async queryAll(input: QueryCommandInput): Promise<Record<string, unknown>[]> {
+  private async queryPrefix(pk: string, prefix: string): Promise<Record<string, unknown>[]> {
+    const input: QueryCommandInput = {
+      TableName: this.table,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+      ExpressionAttributeValues: { ':pk': pk, ':sk': prefix },
+    };
     const items: Record<string, unknown>[] = [];
     let start: QueryCommandInput['ExclusiveStartKey'];
     do {
