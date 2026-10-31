@@ -19,7 +19,6 @@
 #include "camera_ble.h"
 #include "camera_protocol.h"
 #include "coprocessor_update.h"
-#include "debug_console.h"
 #include "dongle_ui.h"
 #include "ethernet_uplink.h"
 #include "hub_console.h"
@@ -31,17 +30,13 @@
 
 static const char *TAG = "trailcamhub";
 
-#if CONFIG_BOARD_TDONGLE || CONFIG_WEB_UI_ENABLE || CONFIG_DEBUG_CONSOLE_ENABLE
-#define HAS_STATUS_OUTPUT 1
 #if CONFIG_BOARD_TDONGLE
 static bool s_display_ready;
 #endif
 #if CONFIG_WEB_UI_ENABLE
 static bool s_web_ready;
 #endif
-#if CONFIG_DEBUG_CONSOLE_ENABLE
 static bool s_console_ready;
-#endif
 
 // Passes the workflow status to the display, the web UI and the console.
 static void on_session_status(const session_status_info_t *info)
@@ -73,7 +68,6 @@ static void on_session_status(const session_status_info_t *info)
         dongle_ui_set_status(phase, info->ssid, info->retry_delay_ms);
     }
 #endif
-#if CONFIG_WEB_UI_ENABLE || CONFIG_DEBUG_CONSOLE_ENABLE
     {
         const char *phase = "idle";
         switch (info->status) {
@@ -103,13 +97,10 @@ static void on_session_status(const session_status_info_t *info)
             web_ui_set_status(phase, info->ssid, info->retry_delay_ms);
         }
 #endif
-#if CONFIG_DEBUG_CONSOLE_ENABLE
         if (s_console_ready) {
-            debug_console_set_status(phase, info->ssid, info->retry_delay_ms);
+            hub_console_set_status(phase, info->ssid, info->retry_delay_ms);
         }
-#endif
     }
-#endif
 }
 
 static void on_media_progress(uint32_t done, uint32_t stored, uint32_t total)
@@ -124,13 +115,10 @@ static void on_media_progress(uint32_t done, uint32_t stored, uint32_t total)
         web_ui_set_media_progress(done, stored, total);
     }
 #endif
-#if CONFIG_DEBUG_CONSOLE_ENABLE
     if (s_console_ready) {
-        debug_console_set_media_progress(done, stored, total);
+        hub_console_set_media_progress(done, stored, total);
     }
-#endif
 }
-#endif
 
 extern "C" void app_main(void)
 {
@@ -208,16 +196,12 @@ extern "C" void app_main(void)
         camera_ble_set_link_callback(web_ui_suspend_access_point);
     }
 #endif
-#if CONFIG_DEBUG_CONSOLE_ENABLE
-    static const debug_console_callbacks_t console_callbacks = {
-        .on_search = session_controller_request_search,
-        .on_stop = session_controller_request_stop,
-    };
-    s_console_ready = debug_console_start(&console_callbacks) == ESP_OK;
+    // Scans, uploads, settings and diagnostics, for the web installer and
+    // scripts, on the console port.
+    s_console_ready = hub_console_start() == ESP_OK;
     if (!s_console_ready) {
         ESP_LOGW(TAG, "Continuing without serial console");
     }
-#endif
 #if CONFIG_BOARD_TDONGLE
     static const dongle_ui_callbacks_t ui_callbacks = {
         .on_search = session_controller_request_search,
@@ -234,22 +218,11 @@ extern "C" void app_main(void)
     }
 #endif
 #endif
-#if HAS_STATUS_OUTPUT
     session_controller_set_status_callback(on_session_status);
     camera_protocol_set_progress_callback(on_media_progress);
-#endif
     error = session_controller_start();
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "Could not start the session controller: %s",
                  esp_err_to_name(error));
     }
-
-#if CONFIG_ESP_CONSOLE_UART
-    // Settings, scans and uploads for the web installer, on a UART console.
-    error = hub_console_start();
-    if (error != ESP_OK) {
-        ESP_LOGE(TAG, "Could not start the serial console: %s",
-                 esp_err_to_name(error));
-    }
-#endif
 }

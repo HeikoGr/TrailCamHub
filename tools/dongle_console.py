@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Drives the serial command console of the firmware (CONFIG_DEBUG_CONSOLE_ENABLE).
+"""Drives the serial console of the firmware (hub_console, "TCH" protocol).
 
 Runs commands, follows the log and copies files from the SD card over the
-USB-Serial-JTAG port. Needs pyserial (part of the ESP-IDF Python environment).
+console port (UART or USB-Serial-JTAG). Needs pyserial (part of the ESP-IDF
+Python environment). The diagnostic commands (heap, ls, cat, rm, sdbench)
+need CONFIG_HUB_CONSOLE_DIAGNOSTICS.
 
   dongle_console.py run status
-  dongle_console.py run search --follow 300 --until "phase: finished|Session ended"
+  dongle_console.py run scan --follow 300 --until "TCH EVENT done"
   dongle_console.py run rm -r /sdcard/<camera>
   dongle_console.py get logs/log-00003.txt ./log-00003.txt
   dongle_console.py get-tree <camera> ./sdcard-copy
   dongle_console.py log 60
 
-Output lines of the firmware are printed as they arrive; "@D" data lines are
-hidden. The port is opened without changing DTR and RTS, so the chip is not
-reset.
+Output lines of the firmware are printed as they arrive; "TCH DATA" lines are
+hidden. A command's reply is every "TCH" line up to "TCH DONE" (asynchronous
+"TCH EVENT" lines aside); it failed if a "TCH ERR" line came. The port is
+opened without changing DTR and RTS, so the chip is not reset.
 """
 
 import argparse
@@ -54,7 +57,7 @@ class Console:
             *complete, self.pending = self.pending.split(b"\n")
             for raw in complete:
                 line = raw.rstrip(b"\r").decode("utf-8", "replace")
-                if self.echo and not line.startswith("@D "):
+                if self.echo and not line.startswith("TCH DATA "):
                     print(line, flush=True)
                 yield line
 
@@ -62,40 +65,39 @@ class Console:
         self.serial.write(command.encode() + b"\n")
         self.serial.flush()
 
-    def run(self, command, timeout=30.0):
-        """Runs a command; returns (ok, output lines) once @OK/@ERR arrives."""
+    def replies(self, command, timeout):
+        """Sends a command and yields its reply lines, without "TCH ", up to
+        "TCH DONE"."""
         self.send(command)
-        output = []
-        started = False
         for line in self.lines(time.monotonic() + timeout):
-            if line == "> " + command:
-                started = True
+            if not line.startswith("TCH ") or line.startswith("TCH EVENT "):
                 continue
-            if not started:
-                continue
-            if line == "@OK":
-                return True, output
-            if line.startswith("@ERR"):
-                return False, output + [line]
-            output.append(line)
-        return False, output + ["(timeout)"]
+            reply = line[4:]
+            if reply.strip() == "DONE":
+                return
+            yield reply
+        raise RuntimeError("no answer to %r" % command)
+
+    def run(self, command, timeout=30.0):
+        """Runs a command; returns (ok, reply lines)."""
+        try:
+            output = list(self.replies(command, timeout))
+        except RuntimeError as error:
+            return False, [str(error)]
+        return not any(line.startswith("ERR") for line in output), output
 
     def read_range(self, path, offset, length, timeout):
         """Returns ({offset: bytes}, file size, sent range, crc) of one cat."""
-        command = "cat %s %d %d" % (path, offset, length)
-        self.send(command)
+        command = "cat %s %d" % (path, offset)
+        if length >= 0:
+            command += " %d" % length
         chunks = {}
         size = None
         end = None
-        started = False
-        for line in self.lines(time.monotonic() + timeout):
-            if line == "> " + command:
-                started = True
-            elif not started:
-                continue
-            elif line.startswith("@FILE "):
+        for line in self.replies(command, timeout):
+            if line.startswith("FILE "):
                 size = int(line.split()[1])
-            elif line.startswith("@D "):
+            elif line.startswith("DATA "):
                 parts = line.split(" ")
                 if len(parts) != 3:
                     continue
@@ -104,21 +106,19 @@ class Console:
                                                              validate=True)
                 except ValueError:
                     pass  # a damaged line; requested again as a gap
-            elif line.startswith("@END "):
+            elif line.startswith("CRC "):
                 _, start, sent, crc = line.split()
                 end = (int(start), int(sent), int(crc, 16))
-            elif line == "@OK" or line.startswith("@ERR"):
-                if line.startswith("@ERR") and size is None:
-                    raise RuntimeError("%s: %s" % (path, line))
-                return chunks, size, end
-        raise RuntimeError("%s: no answer to %r" % (path, command))
+            elif line.startswith("ERR") and size is None:
+                raise RuntimeError("%s: %s" % (path, line))
+        return chunks, size, end
 
     def get(self, path, timeout_per_mb=60.0, attempts=5):
         """Copies a file; requests lost lines again and checks the CRC."""
         chunks, size, end = self.read_range(path, 0, -1,
                                             30 + timeout_per_mb)
         if size is None:
-            raise RuntimeError("%s: no @FILE line" % path)
+            raise RuntimeError("%s: no TCH FILE line" % path)
         for _ in range(attempts):
             gaps = find_gaps(chunks, size)
             if not gaps:
@@ -155,7 +155,7 @@ def list_dir(console, path):
         raise RuntimeError("ls %s: %s" % (path, output[-1:]))
     entries = []
     for line in output:
-        match = re.match(r"([df]) +(\d+) (-?\d+) (.+)$", line)
+        match = re.match(r"INFO ([df]) (\d+) (-?\d+) (.+)$", line)
         if match:
             entries.append((match.group(1) == "d", int(match.group(2)),
                             match.group(4)))

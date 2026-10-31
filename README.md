@@ -130,32 +130,30 @@ With `CONFIG_WEB_UI_ENABLE` (**TrailCamHub PoC → Web UI** in `menuconfig`, off
 
 `sd_log` (enabled by default wherever the SD card is enabled, **TrailCamHub PoC → Log on the SD card**) copies every log line to `/sdcard/logs/log-NNNNN.txt`, so that a field test can be read afterwards without a serial console. The lines are collected from the first statement of `app_main` (the boot messages are kept in a 64 KB PSRAM buffer until the card is mounted; 8 KB of internal RAM without PSRAM) and written by a low-priority task about once per second; each write is synced to the card, so pulling the device loses at most the last second. A new file is started at every boot and when a file reaches 4 MB; the 50 newest files are kept. Lines that do not fit into the buffer, for example while the card is busy, are counted and noted in the file. Lines longer than 255 characters are cut.
 
-### Serial command console
+### Serial console diagnostics
 
-With `CONFIG_DEBUG_CONSOLE_ENABLE` (**TrailCamHub PoC → Serial console**, needs the USB-Serial-JTAG console; on in `sdkconfig.defaults.tdongle-c5`, off in the release profile) the `debug_console` component reads command lines from the native USB port, so that a test run can be driven from a computer without the button, the web UI or taking out the card:
+The serial console (`hub_console`, see [Serial commands](#serial-commands)) runs on the console UART or, on the T-Dongles, on the native USB port (USB-Serial-JTAG). With `CONFIG_HUB_CONSOLE_DIAGNOSTICS` (**TrailCamHub PoC → Serial console**, on by default, off in the release profile) it also has commands that let a test run be driven and read from a computer without taking out the card:
 
 | Command | Effect |
 | --- | --- |
-| `search`, `stop` | Like a short and a long button press |
-| `status` | Workflow phase, download progress, uptime, free internal RAM and PSRAM, free space on the card |
 | `heap [blocks]` | Internal RAM by capability (DMA, RTC RAM, ...) and by region, and PSRAM: free, largest free block, minimum; `blocks` lists the blocks of the small DMA-capable heaps with the first bytes of each used one |
-| `ls [path]` | Directory listing: type, size, modification time, name |
-| `cat <path> [offset [length]]` | File contents as Base64 lines `@D <offset> <data>` between `@FILE <size>` and `@END <offset> <length> <crc32>` |
+| `ls [path]` | Directory listing, one `TCH INFO <d\|f> <size> <mtime> <name>` line per entry |
+| `cat <path> [offset [length]]` | File contents as Base64 lines `TCH DATA <offset> <data>` between `TCH FILE <size>` and `TCH CRC <offset> <length> <crc32>` |
 | `rm [-r] <path>` | Deletes a file, or a directory tree with `-r` |
 | `sdbench [total_kb [chunk_kb]]` | Writes a test file (default 4096 KB) in chunks (default 8 KB) from internal DMA-capable RAM, unbuffered like the video download, and reports KB/s and the slowest chunk |
 
-Paths are below `/sdcard` (`/sdcard/logs`, `/logs` and `logs` are the same); `..` is rejected. Every command ends with `@OK` or `@ERR <reason>`, and the log lines go through the same port, one whole line at a time. A deleted photo or video stays marked as downloaded in `<camera-id>/catalog.csv`; to download a camera's thumbnails and media again, delete that file or the camera's directory (`rm -r <camera-id>`). `rm` refuses while the camera session is connecting or connected, and keeps the log file being written and unfinished files (`.part`, `.tmp`).
+Paths are below `/sdcard` (`/sdcard/logs`, `/logs` and `logs` are the same); `..` is rejected. A deleted photo or video stays marked as downloaded in `<camera-id>/catalog.csv`; to download a camera's thumbnails and media again, delete that file or the camera's directory (`rm -r <camera-id>`). `rm` and `sdbench` refuse while a scan uses the card (connecting, connected, uploading), and `rm` keeps the log file being written and unfinished files (`.part`, `.tmp`).
 
-`tools/dongle_console.py` (needs pyserial, part of the ESP-IDF Python environment) runs commands and copies files; lines that the driver dropped are found by their offsets and requested again, and the CRC-32 is checked:
+`tools/dongle_console.py` (needs pyserial, part of the ESP-IDF Python environment) runs commands and copies files; lines that the USB-Serial-JTAG driver dropped are found by their offsets and requested again, and the CRC-32 is checked:
 
 ```sh
 python tools/dongle_console.py run status
-python tools/dongle_console.py run search --follow 600 --until "Camera session ended"
+python tools/dongle_console.py run scan --follow 600 --until "TCH EVENT done"
 python tools/dongle_console.py get logs/log-00003.txt ./log-00003.txt
 python tools/dongle_console.py get-tree <camera-id> ./card-copy
 ```
 
-The script opens the port without changing DTR and RTS. pyserial's usual sequence clears DTR while RTS is still set, which resets a chip on its USB-Serial-JTAG port. In the Dev Container it uses `ESPPORT` (`/hostdev/ttyACM0`): the container's own `/dev/ttyACM0` is not updated when the board is plugged in again. esptool, however, finds the USB details of the port only under `/dev` and otherwise uses the wrong reset sequence (write timeout); with `/hostdev/ttyACM0` select the USB-Serial-JTAG reset explicitly, for example from the build directory: `python -m esptool --chip esp32c5 -b 460800 --before usb_reset --after hard_reset -p /hostdev/ttyACM0 write_flash "@flash_args"`. The first time the port is opened after the board was plugged in, the host's terminal echo can send boot output back as a command line; the console answers `@ERR unknown command`. Once the console has installed the USB-Serial-JTAG driver, log output that no computer reads is dropped after 50 ms instead of blocking. The component uses about 5 KB of internal RAM; its task stack is in PSRAM.
+The script opens the port without changing DTR and RTS. pyserial's usual sequence clears DTR while RTS is still set, which resets a chip on its USB-Serial-JTAG port. In the Dev Container it uses `ESPPORT` (`/hostdev/ttyACM0`): the container's own `/dev/ttyACM0` is not updated when the board is plugged in again. esptool, however, finds the USB details of the port only under `/dev` and otherwise uses the wrong reset sequence (write timeout); with `/hostdev/ttyACM0` select the USB-Serial-JTAG reset explicitly, for example from the build directory: `python -m esptool --chip esp32c5 -b 460800 --before usb_reset --after hard_reset -p /hostdev/ttyACM0 write_flash "@flash_args"`. The first time the port is opened after the board was plugged in, the host's terminal echo can send boot output back as a command line; the console answers with an error. On the USB-Serial-JTAG port the console installs the driver, so log output that no computer reads is dropped after 50 ms instead of blocking; its buffers take about 2.5 KB of internal RAM, and the console's task stack is in PSRAM where there is some.
 
 ## Compatibility and Protocol Investigation
 
@@ -233,10 +231,9 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/web_ui` | Access point and web UI: status, search/stop, file browser and download, live log |
 | `components/sd_log` | Copy of the log output in text files on the SD card |
 | `components/diagnostics` | Reset reason, core dump status, and heap statistics |
-| `components/debug_console` | Commands on the USB-Serial-JTAG console: search/stop, status, SD card files |
 | `components/session_controller` | Session state machine and the tasks that drive a scan: camera session, then backend uplink |
 | `components/hub_config` | Hub settings in NVS (home Wi-Fi, backend URL, device key) with validation |
-| `components/hub_console` | Line-based serial commands (`scan`, `upload`, `config …`) used by the web installer |
+| `components/hub_console` | Line-based serial commands on the console UART or USB-Serial-JTAG (`scan`, `upload`, `stop`, `config …`, diagnostics) used by the web installer and `tools/dongle_console.py` |
 | `components/uplink` | HTTPS sync with the backend: check-in, thumbnail upload, acknowledgement |
 
 Components do not call each other directly. They report events through callbacks to the session controller, which runs them in one task:
@@ -267,18 +264,19 @@ BLE activation is paused while joining the camera Wi-Fi and during the session, 
 
 #### Serial commands
 
-The console UART accepts one command per line; replies and progress are lines starting with `TCH`:
+The console port (the console UART, or USB-Serial-JTAG on the T-Dongles) accepts one command per line; replies and progress are lines starting with `TCH`, and every command's reply ends with `TCH DONE`:
 
 | Command | Effect |
 |---|---|
-| `status` | Current state and settings (secrets hidden) |
+| `status` | Current state and settings (secrets hidden), the cycle's phase, the download progress, uptime, free RAM and SD card space |
 | `scan` | Read the camera, then sync with the backend if configured |
 | `upload` | Sync the data already on the SD card with the backend |
+| `stop` | End the running scan (a running backend sync completes) |
 | `config show` | List settings |
 | `config set <key> <value>` / `config set-hex <key> <hex>` | Store a setting (`wifi_ssid`, `wifi_password`, `api_url`, `device_key`) |
 | `config unset <key>` / `config clear` | Erase one or all settings |
 
-The settings live in NVS on the hub. The web installer's **Device setup** panel uses exactly these commands.
+The settings live in NVS on the hub. The web installer's **Device setup** panel uses exactly these commands. The diagnostic commands are described under [Serial console diagnostics](#serial-console-diagnostics).
 
 #### Host tests
 

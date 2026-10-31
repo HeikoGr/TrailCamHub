@@ -335,19 +335,17 @@ config CAMERA_DOWNLOAD_STALL_TIMEOUT_S
 endmenu
 
 menu "Serial console"
-    depends on ESP_CONSOLE_USB_SERIAL_JTAG
 
-config DEBUG_CONSOLE_ENABLE
-    bool "Accept commands on the USB-Serial-JTAG console"
-    default n
+config HUB_CONSOLE_DIAGNOSTICS
+    bool "Diagnostic commands (heap, ls, cat, rm, sdbench)"
+    default y
     help
-        Read command lines from the native USB port to start and stop the
-        camera search, show the status, and list, read (as Base64) and
-        delete the files on the SD card, so that a test run can be driven
-        from a computer without the button or the web UI. Type "help" on
-        the console; tools/dongle_console.py runs commands and copies files.
-        The log output then goes through the USB-Serial-JTAG driver, which
-        drops output while no computer reads it instead of blocking.
+        Add commands to the serial console that show the internal RAM by
+        capability and region, and list, read (as Base64 lines) and delete
+        the files on the SD card and measure its write rate, so that a test
+        run can be driven from a computer without taking out the card.
+        tools/dongle_console.py runs commands and copies files. Files are
+        not deleted while a scan uses the card.
 
 endmenu
 

@@ -66,7 +66,3 @@ CONFIG_WEB_UI_ENABLE=y
 # NimBLE's own INFO lines (GAP procedures, empty lines) add little to the
 # camera_ble log and, at a connection setup, overflowed the console buffer.
 CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
-
-# Commands on the USB console (search, stop, status, ls, cat, rm) for test
-# runs driven from a computer; see tools/dongle_console.py.
-CONFIG_DEBUG_CONSOLE_ENABLE=y
