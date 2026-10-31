@@ -127,7 +127,8 @@ extern "C" void app_main(void)
 #endif
 
 #if CONFIG_ETH_UPLINK_ENABLE
-    // Uploads are not implemented yet, so a missing uplink is not fatal.
+    // The backend sync still joins the home Wi-Fi; the wired link is not used
+    // for it yet, so a missing Ethernet uplink is not fatal.
     error = ethernet_uplink_start();
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "Continuing without Ethernet uplink");
