@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { handleRequest } from './api';
 import type { ApiResponse } from './http';
-import type { CameraCheckin, CheckinRequest, CheckinResponse } from './model';
+import type { Camera, CameraCheckin, CheckinRequest, CheckinResponse } from './model';
 import {
   appRequest,
   CAM_2,
   CAM_ID,
+  HUB_ID,
   hubRequest,
   makeInitData,
   NOW,
@@ -74,7 +75,8 @@ describe('hub check-in with several cameras', () => {
 
     expect(res.statusCode).toBe(200);
     const result = body<CheckinResponse>(res);
-    expect(result.config.sleepIntervalS).toBe(1800);
+    // No schedule set in the app: the hub keeps its own.
+    expect(result.config).toEqual({});
     expect(result.cameras.map((c) => c.camId).sort()).toEqual([CAM_2, CAM_ID].sort());
     // New cameras: the hub should send the full media list next time.
     expect(camera(res, CAM_ID)).toMatchObject({ accepted: true, resync: true });
@@ -353,5 +355,143 @@ describe('video requests (app → hub → app)', () => {
       error: 'camera offline',
     });
     expect((await store.getMedia(CAM_ID, 100, 35))?.videoState).toBe('failed');
+  });
+});
+
+describe('wake-up schedule (app → hub, hub → app)', () => {
+  const schedulePath = `/v1/hubs/${HUB_ID}/schedule`;
+  const report = {
+    cameraPlan: '*=120',
+    cameraPlanOrigin: 'built-in',
+    checkinIntervalS: 1800,
+    checkinOrigin: 'local',
+    nextCameraReadAt: NOW + 3600,
+    nextCheckinAt: NOW + 1800,
+    sleeps: true,
+  };
+
+  it('stores the schedule the hub reports and shows it with the cameras', async () => {
+    const { deps, hubKey } = await setup();
+    await handleRequest(
+      hubRequest('/v1/device/checkin', hubKey, { ...checkinBody, schedule: report }),
+      deps,
+    );
+    const cameras = body<Camera[]>(await handleRequest(appRequest('GET', '/v1/cameras'), deps));
+    expect(cameras[0]).toMatchObject({
+      hubLastSeen: NOW,
+      hubSchedule: report,
+      hubScheduleConfig: {},
+      readRequested: false,
+    });
+  });
+
+  it('drops implausible parts of the report', async () => {
+    const { deps, hubKey, store } = await setup();
+    await handleRequest(
+      hubRequest('/v1/device/checkin', hubKey, {
+        cameras: [],
+        schedule: {
+          ...report,
+          cameraPlanOrigin: 'elsewhere',
+          checkinIntervalS: -5,
+          nextCameraReadAt: NOW + 30 * 86_400,
+          nextCheckinAt: 'soon',
+        },
+      }),
+      deps,
+    );
+    expect((await store.getHub(HUB_ID))?.schedule).toEqual({
+      cameraPlan: '*=120',
+      cameraPlanOrigin: 'built-in',
+      checkinIntervalS: 0,
+      checkinOrigin: 'local',
+      nextCameraReadAt: undefined,
+      nextCheckinAt: undefined,
+      sleeps: true,
+    });
+  });
+
+  it('sends a schedule set in the app with every check-in', async () => {
+    const { deps, hubKey } = await setup();
+    const set = await handleRequest(
+      appRequest('PUT', schedulePath, {
+        cameraPlan: ' 17:00-22:00=30 , *=120',
+        checkinIntervalS: 900,
+      }),
+      deps,
+    );
+    expect(set.statusCode).toBe(200);
+    expect(body(set)).toEqual({ cameraPlan: '17:00-22:00=30,*=120', checkinIntervalS: 900 });
+
+    const res = await handleRequest(hubRequest('/v1/device/checkin', hubKey, checkinBody), deps);
+    expect(body<CheckinResponse>(res).config).toEqual({
+      cameraPlan: '17:00-22:00=30,*=120',
+      checkinIntervalS: 900,
+    });
+
+    // Null hands a setting back to the hub.
+    await handleRequest(
+      appRequest('PUT', schedulePath, { cameraPlan: null, checkinIntervalS: 900 }),
+      deps,
+    );
+    const after = await handleRequest(hubRequest('/v1/device/checkin', hubKey, checkinBody), deps);
+    expect(body<CheckinResponse>(after).config).toEqual({ checkinIntervalS: 900 });
+  });
+
+  it('validates the schedule and the hub', async () => {
+    const { deps } = await setup();
+    const put = (path: string, b: unknown, initData?: string) =>
+      handleRequest(appRequest('PUT', path, b, initData), deps);
+    expect((await put(schedulePath, { cameraPlan: 'hourly' })).statusCode).toBe(400);
+    expect((await put(schedulePath, { cameraPlan: '*=2000' })).statusCode).toBe(400);
+    expect((await put(schedulePath, { cameraPlan: 42 })).statusCode).toBe(400);
+    expect((await put(schedulePath, { checkinIntervalS: 60 })).statusCode).toBe(400);
+    expect((await put(schedulePath, { checkinIntervalS: 900.5 })).statusCode).toBe(400);
+    expect((await put('/v1/hubs/other-hub/schedule', {})).statusCode).toBe(404);
+    expect((await put('/v1/hubs/nope/schedule', {})).statusCode).toBe(404);
+    expect((await put(schedulePath, {}, makeInitData(USER_ID + 1))).statusCode).toBe(404);
+    expect((await put(schedulePath, { cameraPlan: 'off' })).statusCode).toBe(200);
+  });
+});
+
+describe('camera reads on request (app → hub → app)', () => {
+  it('delivers a read request until the hub acknowledges it after the read', async () => {
+    const { deps, hubKey, store } = await setup();
+    await handleRequest(hubRequest('/v1/device/checkin', hubKey, checkinBody), deps);
+    const path = `/v1/cameras/${CAM_ID}/commands`;
+
+    const created = await handleRequest(appRequest('POST', path, { type: 'readCamera' }), deps);
+    expect(created.statusCode).toBe(201);
+    expect(body(created)).toEqual({ id: 'cmd-1', type: 'readCamera', state: 'queued' });
+    // One open request per camera.
+    const again = await handleRequest(appRequest('POST', path, { type: 'readCamera' }), deps);
+    expect(again.statusCode).toBe(200);
+    expect(body(again)).toMatchObject({ id: 'cmd-1' });
+
+    let cameras = body<Camera[]>(await handleRequest(appRequest('GET', '/v1/cameras'), deps));
+    expect(cameras.find((c) => c.camId === CAM_ID)?.readRequested).toBe(true);
+    expect(cameras.find((c) => c.camId === CAM_2)?.readRequested).toBe(false);
+
+    for (let i = 0; i < 2; i++) {
+      const res = await handleRequest(
+        hubRequest('/v1/device/checkin', hubKey, { cameras: [] }),
+        deps,
+      );
+      expect(camera(res, CAM_ID)?.commands).toEqual([{ id: 'cmd-1', type: 'readCamera' }]);
+    }
+
+    await handleRequest(
+      hubRequest('/v1/device/ack', hubKey, {
+        cameras: [{ camId: CAM_ID, commands: [{ id: 'cmd-1', state: 'done' }] }],
+      }),
+      deps,
+    );
+    expect((await store.getCommand(CAM_ID, 'cmd-1'))?.state).toBe('done');
+    cameras = body<Camera[]>(await handleRequest(appRequest('GET', '/v1/cameras'), deps));
+    expect(cameras.find((c) => c.camId === CAM_ID)?.readRequested).toBe(false);
+
+    // A new request after the last one was done.
+    const next = await handleRequest(appRequest('POST', path, { type: 'readCamera' }), deps);
+    expect(next.statusCode).toBe(201);
   });
 });

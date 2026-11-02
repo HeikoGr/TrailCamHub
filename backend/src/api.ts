@@ -20,10 +20,20 @@ import type {
   CommandRecord,
   CommandResult,
   HubRecord,
+  HubSchedule,
   MediaItem,
   MediaRecord,
+  ScheduleConfig,
+  ScheduleOrigin,
 } from './model';
 import { ID_PATTERN } from './model';
+import {
+  formatPlan,
+  MAX_CHECKIN_INTERVAL_S,
+  MAX_PLAN_LENGTH,
+  MIN_CHECKIN_INTERVAL_S,
+  parsePlan,
+} from './schedule';
 import type { MediaStorage } from './storage';
 import type { Store } from './store/types';
 
@@ -35,19 +45,19 @@ export interface Deps {
   now: () => number;
   newId?: () => string;
   config?: {
-    sleepIntervalS?: number;
     /** Thumbnail upload URLs handed out per check-in, over all cameras. */
     maxThumbUploadsPerCheckin?: number;
   };
 }
 
-const DEFAULT_SLEEP_INTERVAL_S = 30 * 60;
 const DEFAULT_MAX_THUMB_UPLOADS = 30;
 const MAX_CAMERAS_PER_CHECKIN = 16;
 const MAX_MEDIA_PER_CHECKIN = 2_000;
 /** A hub clock may lag; readAt values further in the future are ignored. */
 const MAX_CLOCK_SKEW_S = 5 * 60;
 const MAX_READ_AGE_S = 30 * 24 * 60 * 60;
+/** Planned times further ahead than this are not believed. */
+const MAX_PLAN_AHEAD_S = 8 * 24 * 60 * 60;
 
 type Handler = (
   req: ApiRequest,
@@ -60,6 +70,7 @@ const routes: Array<{ method: string; pattern: string; handler: Handler }> = [
   { method: 'GET', pattern: '/v1/cameras', handler: listCameras },
   { method: 'GET', pattern: '/v1/cameras/:camId/media', handler: listMedia },
   { method: 'POST', pattern: '/v1/cameras/:camId/commands', handler: createCommand },
+  { method: 'PUT', pattern: '/v1/hubs/:hubId/schedule', handler: setSchedule },
   { method: 'POST', pattern: '/v1/device/checkin', handler: checkin },
   { method: 'POST', pattern: '/v1/device/ack', handler: ack },
 ];
@@ -121,7 +132,15 @@ async function authHub(req: ApiRequest, deps: Deps): Promise<HubRecord> {
 
 // ---- App endpoints -------------------------------------------------------------
 
-function toCamera(record: CameraRecord, hub: HubRecord | undefined): Camera {
+function isOpen(c: CommandRecord): boolean {
+  return c.state === 'queued' || c.state === 'delivered';
+}
+
+function toCamera(
+  record: CameraRecord,
+  hub: HubRecord | undefined,
+  commands: CommandRecord[],
+): Camera {
   return {
     camId: record.camId,
     name: record.name,
@@ -133,6 +152,10 @@ function toCamera(record: CameraRecord, hub: HubRecord | undefined): Camera {
     sdFreeMB: record.sdFreeMB ?? 0,
     hubBatPercent: hub?.batPercent,
     lastSeen: record.lastSeen,
+    hubLastSeen: hub?.lastSeen ?? 0,
+    hubSchedule: hub?.schedule,
+    hubScheduleConfig: hub?.scheduleConfig ?? {},
+    readRequested: commands.some((c) => c.type === 'readCamera' && isOpen(c)),
   };
 }
 
@@ -145,7 +168,10 @@ async function listCameras(req: ApiRequest, _p: Record<string, string>, deps: De
     const records = await Promise.all(ids.map((id) => deps.store.getCamera(id)));
     for (const record of records) {
       // A camera listed under a hub it no longer belongs to is skipped.
-      if (record && record.hubId === hubId) cameras.push(toCamera(record, hub));
+      if (record && record.hubId === hubId) {
+        const commands = await deps.store.listCommands(record.camId);
+        cameras.push(toCamera(record, hub, commands));
+      }
     }
   }
   // Most recently read first.
@@ -174,6 +200,7 @@ async function listMedia(req: ApiRequest, params: Record<string, string>, deps: 
 async function createCommand(req: ApiRequest, params: Record<string, string>, deps: Deps) {
   const camera = await authUserForCamera(req, params.camId ?? '', deps);
   const body = parseJsonBody<{ type?: unknown; dir?: unknown; num?: unknown }>(req);
+  if (body.type === 'readCamera') return createReadCommand(camera, deps);
   if (body.type !== 'requestVideo') throw new HttpError(400, 'Unsupported command type');
   if (!Number.isInteger(body.dir) || !Number.isInteger(body.num)) {
     throw new HttpError(400, 'dir and num must be integers');
@@ -210,6 +237,67 @@ async function createCommand(req: ApiRequest, params: Record<string, string>, de
   return json(201, commandResult(command));
 }
 
+/**
+ * Asks the hub to read the camera at its next check-in. The hub acknowledges
+ * the command at the check-in after the read. One open request per camera.
+ */
+async function createReadCommand(camera: CameraRecord, deps: Deps) {
+  const pending = (await deps.store.listCommands(camera.camId)).find(
+    (c) => c.type === 'readCamera' && isOpen(c),
+  );
+  if (pending) return json(200, commandResult(pending));
+  const now = deps.now();
+  const command: CommandRecord = {
+    id: (deps.newId ?? randomUUID)(),
+    type: 'readCamera',
+    dir: 0,
+    num: 0,
+    state: 'queued',
+    created: now,
+    updated: now,
+  };
+  await deps.store.putCommand(camera.camId, command);
+  return json(201, commandResult(command));
+}
+
+/**
+ * Sets the schedule of a hub (replaces it as a whole). A missing or null
+ * field leaves that setting to the hub; the hub takes the change at its next
+ * check-in.
+ */
+async function setSchedule(req: ApiRequest, params: Record<string, string>, deps: Deps) {
+  const userId = await authUser(req, deps);
+  const hubId = params.hubId ?? '';
+  const hub = ID_PATTERN.test(hubId) ? await deps.store.getHub(hubId) : undefined;
+  // Same answer for "unknown" and "not yours".
+  if (!hub || !(await deps.store.isLinked(userId, hubId))) {
+    throw new HttpError(404, 'Hub not found');
+  }
+  const body = parseJsonBody<{ cameraPlan?: unknown; checkinIntervalS?: unknown }>(req);
+  const config: ScheduleConfig = {};
+  if (body.cameraPlan !== undefined && body.cameraPlan !== null && body.cameraPlan !== '') {
+    if (typeof body.cameraPlan !== 'string' || body.cameraPlan.length > MAX_PLAN_LENGTH) {
+      throw new HttpError(400, 'cameraPlan must be a string of at most 200 characters');
+    }
+    const parsed = parsePlan(body.cameraPlan);
+    if (!parsed.ok) throw new HttpError(400, `Invalid cameraPlan: ${parsed.error}`);
+    config.cameraPlan = formatPlan(parsed.plan);
+  }
+  if (body.checkinIntervalS !== undefined && body.checkinIntervalS !== null) {
+    const value = body.checkinIntervalS;
+    if (
+      !Number.isInteger(value) ||
+      (value as number) < MIN_CHECKIN_INTERVAL_S ||
+      (value as number) > MAX_CHECKIN_INTERVAL_S
+    ) {
+      throw new HttpError(400, 'checkinIntervalS must be 300-86400 seconds');
+    }
+    config.checkinIntervalS = value as number;
+  }
+  await deps.store.setHubScheduleConfig(hubId, config);
+  return json(200, config);
+}
+
 function commandResult(c: CommandRecord): CommandResult {
   return { id: c.id, type: c.type, state: c.state };
 }
@@ -222,6 +310,43 @@ function optionalNumber(value: unknown): number | undefined {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length <= 64 ? value : undefined;
+}
+
+const ORIGINS: ScheduleOrigin[] = ['built-in', 'local', 'remote'];
+
+function origin(value: unknown): ScheduleOrigin {
+  return ORIGINS.find((o) => o === value) ?? 'built-in';
+}
+
+/** A planned time if it is plausible (not in the past, not far ahead). */
+function plannedTime(value: unknown, now: number): number | undefined {
+  const t = optionalNumber(value);
+  return t !== undefined &&
+    Number.isInteger(t) &&
+    t >= now - MAX_CLOCK_SKEW_S &&
+    t <= now + MAX_PLAN_AHEAD_S
+    ? t
+    : undefined;
+}
+
+/** The hub's schedule report; anything malformed is dropped, not rejected. */
+function sanitizeSchedule(raw: unknown, now: number): HubSchedule | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.cameraPlan !== 'string' || r.cameraPlan.length > MAX_PLAN_LENGTH) return undefined;
+  const interval = r.checkinIntervalS;
+  return {
+    cameraPlan: r.cameraPlan,
+    cameraPlanOrigin: origin(r.cameraPlanOrigin),
+    checkinIntervalS:
+      Number.isInteger(interval) && (interval as number) >= 0 && (interval as number) <= 86_400
+        ? (interval as number)
+        : 0,
+    checkinOrigin: origin(r.checkinOrigin),
+    nextCameraReadAt: plannedTime(r.nextCameraReadAt, now),
+    nextCheckinAt: plannedTime(r.nextCheckinAt, now),
+    sleeps: r.sleeps === true,
+  };
 }
 
 function sanitizeMedia(raw: CameraReport['media'], camId: string): MediaRecord[] {
@@ -286,6 +411,7 @@ async function checkin(req: ApiRequest, _p: Record<string, string>, deps: Deps) 
     {
       firmware: optionalString(body.hubFirmware),
       batPercent: optionalNumber(body.hubBatPercent),
+      schedule: sanitizeSchedule(body.schedule, now),
     },
     now,
   );
@@ -327,14 +453,18 @@ async function checkin(req: ApiRequest, _p: Record<string, string>, deps: Deps) 
     }
 
     // Hand out open commands; a delivered command is re-sent until acknowledged.
-    const open = (await deps.store.listCommands(camId)).filter(
-      (c) => c.state === 'queued' || c.state === 'delivered',
-    );
+    const open = (await deps.store.listCommands(camId)).filter(isOpen);
     for (const command of open.filter((c) => c.state === 'queued')) {
       await deps.store.putCommand(camId, { ...command, state: 'delivered', updated: now });
-      await deps.store.setVideoState(camId, command.dir, command.num, 'downloading');
+      if (command.type === 'requestVideo') {
+        await deps.store.setVideoState(camId, command.dir, command.num, 'downloading');
+      }
     }
-    result.commands = open.map((c) => ({ id: c.id, type: c.type, dir: c.dir, num: c.num }));
+    result.commands = open.map((c) =>
+      c.type === 'requestVideo'
+        ? { id: c.id, type: c.type, dir: c.dir, num: c.num }
+        : { id: c.id, type: c.type },
+    );
     results.set(camId, result);
   }
 
@@ -359,7 +489,8 @@ async function checkin(req: ApiRequest, _p: Record<string, string>, deps: Deps) 
         r.thumbUploads.length > 0 ||
         r.commands.length > 0,
     ),
-    config: { sleepIntervalS: deps.config?.sleepIntervalS ?? DEFAULT_SLEEP_INTERVAL_S },
+    // The schedule set in the app; without it the hub keeps its own.
+    config: hub.scheduleConfig ?? {},
   };
   return json(200, response);
 }

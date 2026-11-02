@@ -12,8 +12,36 @@
 
 export type FileType = 0 | 2;
 export type VideoState = 'none' | 'requested' | 'downloading' | 'available' | 'failed';
-export type CommandType = 'requestVideo';
+/** requestVideo: fetch a video (dir/num); readCamera: read the camera now. */
+export type CommandType = 'requestVideo' | 'readCamera';
 export type CommandState = 'queued' | 'delivered' | 'done' | 'failed';
+
+/** Where the hub got a schedule setting from. */
+export type ScheduleOrigin = 'built-in' | 'local' | 'remote';
+
+/** The hub's wake-up schedule as it reports it with every check-in. */
+export interface HubSchedule {
+  /** Camera read plan in effect, e.g. "05:00-09:00=30,*=120" or "off". */
+  cameraPlan: string;
+  cameraPlanOrigin: ScheduleOrigin;
+  /** Check-in interval in effect, seconds; 0 = only after camera reads. */
+  checkinIntervalS: number;
+  checkinOrigin: ScheduleOrigin;
+  /** Planned next camera read and check-in, Unix seconds; absent if none. */
+  nextCameraReadAt?: number;
+  nextCheckinAt?: number;
+  /** The hub sleeps between cycles: commands wait for its next check-in. */
+  sleeps: boolean;
+}
+
+/**
+ * Schedule set in the app for a hub. Sent with every check-in; it overrides
+ * the hub's own settings while set. Absent fields leave them to the hub.
+ */
+export interface ScheduleConfig {
+  cameraPlan?: string;
+  checkinIntervalS?: number;
+}
 
 export interface HubRecord {
   hubId: string;
@@ -24,6 +52,9 @@ export interface HubRecord {
   batPercent?: number;
   /** Last check-in, Unix seconds; 0 = never. */
   lastSeen: number;
+  /** As reported at the last check-in. */
+  schedule?: HubSchedule;
+  scheduleConfig?: ScheduleConfig;
 }
 
 export interface CameraRecord {
@@ -71,6 +102,14 @@ export interface Camera {
   sdFreeMB: number;
   hubBatPercent?: number;
   lastSeen: number;
+  /** Last check-in of the hub, Unix seconds; 0 = never. */
+  hubLastSeen: number;
+  /** The hub's schedule as reported at its last check-in. */
+  hubSchedule?: HubSchedule;
+  /** Schedule set in the app for the hub. */
+  hubScheduleConfig: ScheduleConfig;
+  /** A camera read was asked for and has not been done yet. */
+  readRequested: boolean;
 }
 
 export interface MediaItem {
@@ -115,6 +154,7 @@ export interface CameraReport {
 export interface CheckinRequest {
   hubFirmware?: string;
   hubBatPercent?: number;
+  schedule?: HubSchedule;
   cameras?: CameraReport[];
 }
 
@@ -129,13 +169,15 @@ export interface CameraCheckin {
   resync: boolean;
   /** Missing thumbnails: PUT the JPEG to `url`, then report it via /ack. */
   thumbUploads: Array<{ dir: number; num: number; url: string }>;
-  commands: Array<{ id: string; type: CommandType; dir: number; num: number }>;
+  /** dir/num only for requestVideo. */
+  commands: Array<{ id: string; type: CommandType; dir?: number; num?: number }>;
 }
 
 export interface CheckinResponse {
   serverTime: number;
   cameras: CameraCheckin[];
-  config: { sleepIntervalS: number };
+  /** Schedule set in the app; empty if none, so the hub uses its own. */
+  config: ScheduleConfig;
 }
 
 export interface CameraAck {

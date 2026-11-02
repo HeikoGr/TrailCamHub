@@ -22,6 +22,36 @@ export interface Camera {
   hubBatPercent?: number;
   /** When the hub last read the camera, Unix seconds. */
   lastSeen: number;
+  /** Last check-in of the hub, Unix seconds; 0 = never. */
+  hubLastSeen: number;
+  /** The hub's wake-up schedule as reported at its last check-in. */
+  hubSchedule?: HubSchedule;
+  /** Schedule set in the app for the hub; empty fields: the hub's own. */
+  hubScheduleConfig: ScheduleConfig;
+  /** A camera read was asked for and has not been done yet. */
+  readRequested: boolean;
+}
+
+/** Where the hub got a schedule setting from. */
+export type ScheduleOrigin = 'built-in' | 'local' | 'remote';
+
+export interface HubSchedule {
+  /** Camera read plan in effect, e.g. "05:00-09:00=30,*=120" or "off". */
+  cameraPlan: string;
+  cameraPlanOrigin: ScheduleOrigin;
+  /** Check-in interval in effect, seconds; 0 = only after camera reads. */
+  checkinIntervalS: number;
+  checkinOrigin: ScheduleOrigin;
+  /** Planned next camera read and check-in, Unix seconds. */
+  nextCameraReadAt?: number;
+  nextCheckinAt?: number;
+  /** The hub sleeps between cycles: requests wait for its next check-in. */
+  sleeps: boolean;
+}
+
+export interface ScheduleConfig {
+  cameraPlan?: string;
+  checkinIntervalS?: number;
 }
 
 /** 0 = photo, 2 = video, as reported in the camera's media list. */
@@ -44,7 +74,7 @@ export interface MediaItem {
   videoState: VideoState;
 }
 
-export type CommandType = 'requestVideo';
+export type CommandType = 'requestVideo' | 'readCamera';
 
 export interface CommandResult {
   id: string;
@@ -58,4 +88,8 @@ export interface ApiClient {
   listCameras(): Promise<Camera[]>;
   listMedia(camId: string): Promise<MediaItem[]>;
   requestVideo(camId: string, item: Pick<MediaItem, 'dir' | 'num'>): Promise<CommandResult>;
+  /** Asks the hub to read the camera at its next check-in. */
+  readCamera(camId: string): Promise<CommandResult>;
+  /** Replaces the schedule set in the app for a hub; returns what is stored. */
+  setSchedule(hubId: string, config: ScheduleConfig): Promise<ScheduleConfig>;
 }

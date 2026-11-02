@@ -1,4 +1,4 @@
-import type { ApiClient, Camera, CommandResult, MediaItem } from './types';
+import type { ApiClient, Camera, CommandResult, MediaItem, ScheduleConfig } from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -47,6 +47,21 @@ export class HttpApiClient implements ApiClient {
         num: item.num,
       },
     );
+  }
+
+  readCamera(camId: string): Promise<CommandResult> {
+    return this.request<CommandResult>(
+      'POST',
+      `/v1/cameras/${encodeURIComponent(camId)}/commands`,
+      { type: 'readCamera' },
+    );
+  }
+
+  setSchedule(hubId: string, config: ScheduleConfig): Promise<ScheduleConfig> {
+    return this.request<ScheduleConfig>('PUT', `/v1/hubs/${encodeURIComponent(hubId)}/schedule`, {
+      cameraPlan: config.cameraPlan ?? null,
+      checkinIntervalS: config.checkinIntervalS ?? null,
+    });
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

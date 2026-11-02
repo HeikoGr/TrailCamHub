@@ -77,3 +77,5 @@ All requests carry `Authorization: tma <initData>`.
 | GET    | `/v1/cameras`                  | Cameras of all hubs linked to the user            |
 | GET    | `/v1/cameras/{camId}/media`    | Recordings with thumbnail URLs                    |
 | POST   | `/v1/cameras/{camId}/commands` | e.g. `{"type":"requestVideo","dir":100,"num":35}` |
+| POST   | `/v1/cameras/{camId}/commands` | `{"type":"readCamera"}`: read at next check-in    |
+| PUT    | `/v1/hubs/{hubId}/schedule`    | Camera read plan and check-in interval of a hub   |

@@ -25,11 +25,6 @@ Parameters:
       Optional: name of an SSM SecureString parameter holding the bot token, for
       accounts where Parameter Store is available. Used only if
       TelegramBotToken is empty.
-  SleepIntervalSeconds:
-    Type: Number
-    Default: 1800
-    MinValue: 60
-    Description: Sleep interval the hub is told to use between check-ins.
   ThumbnailRetentionDays:
     Type: Number
     Default: 365
@@ -144,7 +139,6 @@ Resources:
           MEDIA_BUCKET: !Ref MediaBucket
           TELEGRAM_BOT_TOKEN: !Ref TelegramBotToken
           TELEGRAM_BOT_TOKEN_PARAM: !Ref TelegramBotTokenParameter
-          SLEEP_INTERVAL_S: !Ref SleepIntervalSeconds
           NODE_OPTIONS: --enable-source-maps
       LoggingConfig:
         LogGroup: !Ref ApiLogGroup
