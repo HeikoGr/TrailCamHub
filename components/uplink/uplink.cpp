@@ -18,6 +18,8 @@
 #include "device_info.hpp"
 #include "media_catalog.hpp"
 #include "media_store.hpp"
+#include "schedule_state.hpp"
+#include "sdkconfig.h"
 #include "time_sync.h"
 #include "uplink_protocol.hpp"
 
@@ -225,6 +227,28 @@ void collect_cameras(CheckinRequest &request, std::vector<CameraState> &cameras)
     }
 }
 
+// The schedule as it will be once this sync has succeeded.
+ScheduleReport schedule_report()
+{
+    const schedule::Effective effective = schedule::effective();
+    const schedule::Times times = schedule::next_times_after_sync();
+    ScheduleReport report;
+    report.present = true;
+    report.camera_plan = effective.camera_plan;
+    report.camera_plan_origin =
+        schedule::origin_name(effective.camera_plan_origin);
+    report.checkin_interval_s = effective.settings.uplink
+                                    ? (std::int64_t)effective.checkin_min * 60
+                                    : 0;
+    report.checkin_origin = schedule::origin_name(effective.checkin_origin);
+    report.next_camera_read_at = schedule::to_unix(times.camera);
+    report.next_checkin_at = schedule::to_unix(times.checkin);
+#if CONFIG_POWER_DEEP_SLEEP
+    report.sleeps = true;
+#endif
+    return report;
+}
+
 // Remembers what the backend now knows, so the next check-in sends a delta.
 void apply_checkin_result(CameraState &camera, const CameraCheckin &result)
 {
@@ -257,6 +281,7 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
 
     CheckinRequest request;
     request.hub_firmware = esp_app_get_description()->version;
+    request.schedule = schedule_report();
     std::vector<CameraState> cameras;
     collect_cameras(request, cameras);
     report.cameras_reported = (int)request.cameras.size();
@@ -280,6 +305,11 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
     }
     report.server_time = response.server_time;
     set_clock(response.server_time);
+    schedule::Remote remote;
+    remote.has_camera_plan = response.has_camera_plan;
+    remote.camera_plan = response.camera_plan;
+    remote.checkin_interval_s = response.checkin_interval_s;
+    schedule::apply_remote(remote);
 
     AckRequest ack;
     for (const CameraCheckin &result : response.cameras) {
@@ -318,12 +348,31 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
             }
         }
 
-        // 3. Commands. Video downloads are not implemented yet: remember the
-        // request in the catalog and tell the backend it failed, so the user
-        // sees it instead of waiting forever.
+        // 3. Commands. A camera read is acknowledged at the check-in after
+        // the read (the backend sends the command again until then). Video
+        // downloads are not implemented yet: remember the request in the
+        // catalog and tell the backend it failed, so the user sees it instead
+        // of waiting forever.
         for (const Command &command : result.commands) {
             CommandResult command_result;
             command_result.id = command.id;
+            if (command.type == "readCamera") {
+                const schedule::ReadRequests::Reply reply =
+                    schedule::on_read_command(command.id);
+                if (reply == schedule::ReadRequests::Reply::pending) {
+                    continue;
+                }
+                command_result.done =
+                    reply == schedule::ReadRequests::Reply::done;
+                if (!command_result.done) {
+                    command_result.error = "the camera could not be read";
+                }
+                ESP_LOGI(TAG, "Camera read %s for %s: %s", command.id.c_str(),
+                         result.cam_id.c_str(),
+                         command_result.done ? "done" : "failed");
+                camera_ack.commands.push_back(command_result);
+                continue;
+            }
             if (command.type == "requestVideo") {
                 if (camera != nullptr) {
                     camera->catalog_changed |= camera->catalog.set_flag(

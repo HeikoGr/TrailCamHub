@@ -1,5 +1,5 @@
 // Device setup panel: stores the hub's settings (home Wi-Fi, backend URL,
-// device key) and starts scans over the serial connection. It speaks the
+// device key, wake-up schedule) and starts scans over the serial connection. It speaks the
 // hub's line protocol: commands go out as text lines, replies come back as
 // "TCH ..." lines inside the normal log stream (see hub_console.h).
 
@@ -22,8 +22,13 @@
     wifi_password: panel.querySelector("#ds-current-wifi_password"),
     api_url: panel.querySelector("#ds-current-api_url"),
     device_key: panel.querySelector("#ds-current-device_key"),
+    camera_plan: panel.querySelector("#ds-current-camera_plan"),
+    checkin_min: panel.querySelector("#ds-current-checkin_min"),
     uplink: panel.querySelector("#ds-current-uplink"),
   };
+  const scheduleList = panel.querySelector("#ds-schedule");
+  // "TCH INFO" lines of the status reply that describe the schedule.
+  const SCHEDULE_INFO = ["profile ", "camera plan ", "check-in every ", "next camera read ", "next check-in ", "failed in a row", "camera battery "];
 
   const STATE_TEXT = {
     IDLE: "Idle — waiting for a scan",
@@ -47,7 +52,7 @@
 
   // Remembered form values, so the settings need not be typed again on every
   // visit. Opt-out via the checkbox, which also deletes what is stored.
-  const FIELDS = ["wifi_ssid", "wifi_password", "api_url", "device_key"];
+  const FIELDS = ["wifi_ssid", "wifi_password", "api_url", "device_key", "camera_plan", "checkin_min"];
   const STORAGE_KEY = "trailcamhub.deviceSetup";
   const PREFERENCE_KEY = "trailcamhub.deviceSetup.remember";
   const rememberBox = panel.querySelector("#ds-remember");
@@ -173,13 +178,20 @@
     if (values.device_key && !/^[A-Za-z0-9_-]{1,64}\.[A-Za-z0-9_-]{16,128}$/.test(values.device_key)) {
       return "The device key must look like <hubId>.<secret>.";
     }
+    // The hub checks the plan in full and answers with the reason.
+    if (values.camera_plan && !/^(off|((\d\d:\d\d-\d\d:\d\d|\*)=\d{1,4}[,; ]*)+)$/.test(values.camera_plan)) {
+      return "The camera plan must look like 05:00-09:00=30,*=120 (or off).";
+    }
+    if (values.checkin_min && (!/^\d{1,4}$/.test(values.checkin_min) || Number(values.checkin_min) > 1440)) {
+      return "The check-in interval must be 0 to 1440 minutes.";
+    }
     return "";
   }
 
   async function saveSettings(event) {
     event.preventDefault();
     const values = Object.fromEntries(
-      ["wifi_ssid", "wifi_password", "api_url", "device_key"].map((key) => [
+      FIELDS.map((key) => [
         key,
         form.elements[key].value.trim(),
       ]),
@@ -235,6 +247,16 @@
         }
         break;
       }
+      case "INFO":
+        if (text.startsWith("profile ")) {
+          scheduleList.replaceChildren();
+        }
+        if (SCHEDULE_INFO.some((prefix) => text.startsWith(prefix))) {
+          const item = document.createElement("li");
+          item.textContent = text;
+          scheduleList.append(item);
+        }
+        break;
       case "OK":
         addLog("ok", text);
         break;

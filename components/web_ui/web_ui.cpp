@@ -60,6 +60,7 @@
 #endif
 #include "sd_card.h"
 #include "sd_log.h"
+#include "schedule_state.hpp"
 #include "time_sync.h"
 #include "web_paths.hpp"
 #include "web_ui.h"
@@ -517,6 +518,18 @@ esp_err_t handle_status(httpd_req_t *req)
     snprintf(now_text, sizeof(now_text), ",\"time\":%lld",
              clock_valid ? (long long)time(NULL) : 0LL);
     json += now_text;
+    // Seconds until the next scheduled camera read and check-in; -1: none.
+    const schedule::Times times = schedule::next_times();
+    const std::int64_t now_s = schedule::now();
+    char next_text[96];
+    snprintf(
+        next_text, sizeof(next_text),
+        ",\"next_camera_s\":%lld,\"next_checkin_s\":%lld",
+        times.camera == schedule::kNever ? -1LL
+                                         : (long long)(times.camera - now_s),
+        times.checkin == schedule::kNever ? -1LL
+                                          : (long long)(times.checkin - now_s));
+    json += next_text;
     refresh_cameras(now_us);
     json += ",\"cameras\":[";
     for (size_t i = 0; i < s_cameras.size(); i++) {

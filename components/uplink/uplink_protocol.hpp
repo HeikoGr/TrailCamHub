@@ -30,9 +30,24 @@ struct CameraReport {
     std::vector<MediaRef> media;
 };
 
+// The hub's wake-up schedule as it applies now.
+struct ScheduleReport {
+    bool present = false;
+    std::string camera_plan;              // e.g. "*=120"; "off"
+    std::string camera_plan_origin;       // "built-in", "local", "remote"
+    std::int64_t checkin_interval_s = 0;  // 0 = none on schedule
+    std::string checkin_origin;
+    // Unix seconds; 0 = none planned or the clock is not set.
+    std::int64_t next_camera_read_at = 0;
+    std::int64_t next_checkin_at = 0;
+    // The hub sleeps between cycles (it only answers at check-ins).
+    bool sleeps = false;
+};
+
 struct CheckinRequest {
     std::string hub_firmware;
     std::int64_t hub_bat_percent = -1;  // -1 = unknown
+    ScheduleReport schedule;
     std::vector<CameraReport> cameras;
 };
 
@@ -60,7 +75,11 @@ struct CameraCheckin {
 
 struct CheckinResponse {
     std::int64_t server_time = 0;
-    std::int64_t sleep_interval_s = 0;
+    // Schedule set for this hub in the backend ("config"); a missing value
+    // means none is set there.
+    bool has_camera_plan = false;
+    std::string camera_plan;
+    std::int64_t checkin_interval_s = -1;  // -1 = not set
     std::vector<CameraCheckin> cameras;
 };
 

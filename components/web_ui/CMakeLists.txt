@@ -12,4 +12,5 @@ idf_component_register(SRCS ${srcs}
                        EMBED_TXTFILES ${embed}
                        PRIV_REQUIRES esp_event esp_http_server esp_netif
                                      esp_timer esp_wifi fatfs lwip nvs_flash
-                                     sd_log sd_storage mp4_mux time_sync)
+                                     schedule schedule_state sd_log sd_storage
+                                     mp4_mux time_sync)

@@ -1,8 +1,8 @@
 #pragma once
 
 // Names, validation and display rules for the hub's stored settings (home
-// Wi-Fi and backend access). Pure logic, host-testable; storage in NVS lives
-// in hub_config.cpp.
+// Wi-Fi, backend access and the wake-up schedule). Pure logic, host-testable;
+// storage in NVS lives in hub_config.cpp.
 
 #include <cstddef>
 #include <string>
@@ -15,16 +15,25 @@ enum class Key {
     wifi_password,
     api_url,
     device_key,
+    // Camera read plan, e.g. "05:00-09:00=30,*=120" (see schedule_plan.hpp);
+    // empty: the default of the build.
+    camera_plan,
+    // Backend check-in interval in minutes ("0": none on schedule); empty:
+    // the default of the build.
+    checkin_min,
 };
 
-constexpr Key kAllKeys[] = {Key::wifi_ssid, Key::wifi_password, Key::api_url,
-                            Key::device_key};
+constexpr Key kAllKeys[] = {Key::wifi_ssid,   Key::wifi_password,
+                            Key::api_url,     Key::device_key,
+                            Key::camera_plan, Key::checkin_min};
 
 struct Settings {
     std::string wifi_ssid;
     std::string wifi_password;
     std::string api_url;
     std::string device_key;
+    std::string camera_plan;
+    std::string checkin_min;
 };
 
 // Name used on the serial console and as the NVS key (max. 15 characters).

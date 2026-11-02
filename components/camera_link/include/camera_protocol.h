@@ -26,6 +26,12 @@ void camera_protocol_request_stop(void);
 bool camera_protocol_work_completed(void);
 
 /*
+ * Battery level in percent that the camera reported in the last session
+ * (device info, cmdId 512); -1 if no camera has reported one since boot.
+ */
+int camera_protocol_last_battery_percent(void);
+
+/*
  * Progress of the media download in the running session: `done` of `total`
  * files handled, `stored` of them saved to the SD card. Called from the camera
  * session task when the download list is known and after each file; must

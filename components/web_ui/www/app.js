@@ -94,6 +94,13 @@ async function refreshStatus() {
       ? `${size(s.sd_free_mb * 1048576)} of ${size(s.sd_total_mb * 1048576)}`
       : "no card";
     $("uptime").textContent = duration(s.uptime_s);
+    // Only when a camera read plan is set on the dongle.
+    $("nextreadrow").hidden = !(s.next_camera_s >= 0);
+    if (s.next_camera_s >= 0) {
+      $("nextread").textContent = s.next_camera_s > 0
+        ? "in " + duration(s.next_camera_s)
+        : "now";
+    }
     showSync(s);
     syncClock(s);
     $("ap").textContent = s.ap;

@@ -103,6 +103,25 @@ void append_media(std::string &out, const MediaRef &m, bool full)
     out += buffer;
 }
 
+// The object stored under `key`, as its own substring; empty if missing.
+std::string object_of(const std::string &json, const std::string &key)
+{
+    const std::size_t key_pos = json.find("\"" + key + "\"");
+    if (key_pos == std::string::npos) {
+        return "";
+    }
+    const std::size_t open =
+        json.find_first_not_of(" \t\r\n:", key_pos + key.size() + 2);
+    if (open == std::string::npos || json[open] != '{') {
+        return "";
+    }
+    const std::size_t close = matching_close(json, open);
+    if (close == std::string::npos) {
+        return "";
+    }
+    return json.substr(open, close - open + 1);
+}
+
 // Reads a boolean field; leaves `out` unchanged if it is missing.
 void find_bool(const std::string &json, const std::string &key, bool &out)
 {
@@ -164,6 +183,26 @@ std::string build_checkin_json(const CheckinRequest &request)
         "{\"hubFirmware\":\"" + json_escape(request.hub_firmware) + "\"";
     if (request.hub_bat_percent >= 0) {
         out += ",\"hubBatPercent\":" + std::to_string(request.hub_bat_percent);
+    }
+    const ScheduleReport &schedule = request.schedule;
+    if (schedule.present) {
+        out += ",\"schedule\":{\"cameraPlan\":\"" +
+               json_escape(schedule.camera_plan) +
+               "\",\"cameraPlanOrigin\":\"" +
+               json_escape(schedule.camera_plan_origin) +
+               "\",\"checkinIntervalS\":" +
+               std::to_string(schedule.checkin_interval_s) +
+               ",\"checkinOrigin\":\"" + json_escape(schedule.checkin_origin) +
+               "\"";
+        if (schedule.next_camera_read_at > 0) {
+            out += ",\"nextCameraReadAt\":" +
+                   std::to_string(schedule.next_camera_read_at);
+        }
+        if (schedule.next_checkin_at > 0) {
+            out += ",\"nextCheckinAt\":" +
+                   std::to_string(schedule.next_checkin_at);
+        }
+        out += schedule.sleeps ? ",\"sleeps\":true}" : ",\"sleeps\":false}";
     }
     out += ",\"cameras\":[";
     for (std::size_t i = 0; i < request.cameras.size(); i++) {
@@ -260,7 +299,16 @@ bool parse_checkin_response(const std::string &json, CheckinResponse &out)
     if (!json_find_int(json, "serverTime", out.server_time)) {
         return false;
     }
-    json_find_int(json, "sleepIntervalS", out.sleep_interval_s);
+    const std::string config = object_of(json, "config");
+    if (!config.empty()) {
+        out.has_camera_plan =
+            json_find_string(config, "cameraPlan", out.camera_plan);
+        if (!json_find_int(config, "checkinIntervalS",
+                           out.checkin_interval_s) ||
+            out.checkin_interval_s < 0) {
+            out.checkin_interval_s = -1;
+        }
+    }
 
     for (const std::string &camera_json : array_objects(json, "cameras")) {
         CameraCheckin camera;

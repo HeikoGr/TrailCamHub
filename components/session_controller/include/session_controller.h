@@ -13,7 +13,7 @@
  * retried a bounded number of times per scan.
  *
  * The controller does not know who drives it. Front ends (serial console,
- * display and button, a local web UI, a sleep scheduler) request cycles with
+ * display and button, a local web UI, the scheduler) request cycles with
  * the functions below and follow the progress through status listeners or
  * session_controller_get_status().
  */
@@ -59,6 +59,13 @@ typedef struct {
      * upload-only cycle.
      */
     char camera_ssid[33];
+    /*
+     * The camera session of this cycle ended without an error, and the
+     * backend sync of this cycle succeeded. Kept after the cycle ends and
+     * cleared when the next cycle starts.
+     */
+    bool camera_ok;
+    bool sync_ok;
     /* True only on the update that ends a cycle. */
     bool cycle_finished;
     /* Result of the last finished cycle; NONE while a new one runs. */

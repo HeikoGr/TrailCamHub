@@ -1,5 +1,7 @@
 #include "hub_config_rules.hpp"
 
+#include "schedule_plan.hpp"
+
 namespace hub_config
 {
 
@@ -35,6 +37,10 @@ const char *key_name(Key key)
         return "api_url";
     case Key::device_key:
         return "device_key";
+    case Key::camera_plan:
+        return "camera_plan";
+    case Key::checkin_min:
+        return "checkin_min";
     }
     return "unknown";
 }
@@ -64,6 +70,10 @@ std::string &field(Settings &settings, Key key)
         return settings.wifi_password;
     case Key::api_url:
         return settings.api_url;
+    case Key::camera_plan:
+        return settings.camera_plan;
+    case Key::checkin_min:
+        return settings.checkin_min;
     case Key::device_key:
         break;
     }
@@ -116,6 +126,33 @@ std::string validate(Key key, const std::string &value)
         }
         return "";
     }
+    case Key::camera_plan: {
+        schedule::Plan plan;
+        std::string reason;
+        if (value.size() > 200 || has_control_chars(value)) {
+            return "camera plan is too long or contains invalid characters";
+        }
+        if (!schedule::parse_plan(value, plan, &reason)) {
+            return "camera plan: " + reason;
+        }
+        return "";
+    }
+    case Key::checkin_min: {
+        if (value.empty() || value.size() > 4) {
+            return "check-in interval must be 0-1440 minutes";
+        }
+        unsigned long minutes = 0;
+        for (char c : value) {
+            if (c < '0' || c > '9') {
+                return "check-in interval must be 0-1440 minutes";
+            }
+            minutes = minutes * 10 + (unsigned long)(c - '0');
+        }
+        if (minutes > schedule::kMaxIntervalMin) {
+            return "check-in interval must be 0-1440 minutes";
+        }
+        return "";
+    }
     }
     return "unknown setting";
 }
@@ -123,7 +160,8 @@ std::string validate(Key key, const std::string &value)
 std::string display_value(Key key, const std::string &value)
 {
     if (value.empty()) {
-        return "(not set)";
+        return key == Key::camera_plan || key == Key::checkin_min ? "(default)"
+                                                                  : "(not set)";
     }
     if (key == Key::wifi_password) {
         return "(set)";

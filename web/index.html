@@ -61,7 +61,7 @@
 
       <section id="device-setup" aria-labelledby="setup-heading">
         <h2 id="setup-heading">Device setup</h2>
-        <p>Store the hub's settings and start a scan over the USB connection. The hub stays idle until a scan is requested: it then wakes the camera, reads its new recordings and, if the uplink is configured, uploads them to the backend over your Wi-Fi.</p>
+        <p>Store the hub's settings and start a scan over the USB connection. A scan wakes the camera, reads its new recordings and, if the uplink is configured, uploads them to the backend over your Wi-Fi. With the autonomous profile the hub also reads the camera and checks in on its own schedule and sleeps in between; after a power-on or reset it stays awake for ten minutes (press reset on the board to connect again).</p>
 
         <div class="console-controls">
           <button id="ds-connect" class="primary-button" type="button">Connect to the hub</button>
@@ -88,7 +88,15 @@
               <input name="device_key" type="password" placeholder="&lt;hubId&gt;.&lt;secret&gt;" spellcheck="false">
               <small>Stored: <span id="ds-current-device_key">–</span> · hub key from <code>npm run register-hub</code> in <code>backend/</code></small>
             </label>
-            <p class="note">Uplink: <span id="ds-current-uplink">–</span>. Empty fields keep their stored value. Secrets are never read back from the hub.</p>
+            <label>Camera read plan
+              <input name="camera_plan" placeholder="05:00-09:00=30,17:00-22:00=30,*=120" spellcheck="false">
+              <small>Stored: <span id="ds-current-camera_plan">–</span> · time windows with an interval in minutes, <code>*</code> for the rest of the day, <code>off</code> for none</small>
+            </label>
+            <label>Backend check-in interval (minutes)
+              <input name="checkin_min" inputmode="numeric" placeholder="30" spellcheck="false">
+              <small>Stored: <span id="ds-current-checkin_min">–</span> · 0 = only after camera reads</small>
+            </label>
+            <p class="note">Uplink: <span id="ds-current-uplink">–</span>. Empty fields keep their stored value. Secrets are never read back from the hub. A schedule set in the app takes precedence over the one stored here.</p>
             <label class="ds-remember">
               <input id="ds-remember" type="checkbox">
               <span>Remember these values in this browser <small>(stored unencrypted in local storage, including the password and device key; unticking deletes them)</small></span>
@@ -104,6 +112,8 @@
             <button class="secondary-button" type="button" data-command="stop">Stop scan</button>
             <button class="secondary-button" type="button" data-command="status">Refresh status</button>
             <button id="ds-erase" class="secondary-button" type="button">Erase settings</button>
+            <h3>Schedule</h3>
+            <ul id="ds-schedule" class="ds-schedule" aria-live="polite"><li>Refresh the status to see it.</li></ul>
             <h3>Activity</h3>
             <ol id="ds-log" class="ds-log" aria-live="polite"></ol>
           </div>

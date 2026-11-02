@@ -108,6 +108,19 @@ TEST_CASE("setting validation")
     CHECK_FALSE(validate(Key::device_key, ".abcdefghijklmnopq").empty());
     CHECK_FALSE(validate(Key::device_key, "CAM.short").empty());
     CHECK_FALSE(validate(Key::device_key, "CAM.abcdefghijklmnop!").empty());
+
+    CHECK(validate(Key::camera_plan, "05:00-09:00=30,*=120").empty());
+    CHECK(validate(Key::camera_plan, "off").empty());
+    CHECK(validate(Key::camera_plan, "05:00-09:00=30").empty());
+    CHECK_FALSE(validate(Key::camera_plan, "every hour").empty());
+    CHECK_FALSE(validate(Key::camera_plan, "*=2000").empty());
+
+    CHECK(validate(Key::checkin_min, "0").empty());
+    CHECK(validate(Key::checkin_min, "30").empty());
+    CHECK(validate(Key::checkin_min, "1440").empty());
+    CHECK_FALSE(validate(Key::checkin_min, "1441").empty());
+    CHECK_FALSE(validate(Key::checkin_min, "-5").empty());
+    CHECK_FALSE(validate(Key::checkin_min, "30m").empty());
 }
 
 TEST_CASE("secrets are never displayed")
@@ -117,6 +130,8 @@ TEST_CASE("secrets are never displayed")
     CHECK(display_value(Key::wifi_ssid, "Home") == "Home");
     CHECK(display_value(Key::wifi_password, "secret123") == "(set)");
     CHECK(display_value(Key::wifi_password, "") == "(not set)");
+    CHECK(display_value(Key::camera_plan, "") == "(default)");
+    CHECK(display_value(Key::camera_plan, "*=60") == "*=60");
     CHECK(display_value(Key::device_key, "CAM1.abcdefghijklmnopqr") ==
           "CAM1.*** (set)");
 }

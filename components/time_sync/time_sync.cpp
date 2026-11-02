@@ -6,11 +6,13 @@
 #include <time.h>
 
 #include "esp_app_desc.h"
+#include "esp_attr.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
+#include "esp_system.h"
 #include "sdkconfig.h"
 
 using timepolicy::Source;
@@ -21,6 +23,29 @@ static const char *TAG = "trailcamhub_time";
 #define CLOCK_VALID_FROM 1704067200
 
 static std::atomic<int> s_source{static_cast<int>(Source::none)};
+// The clock keeps running in deep sleep, and so does where its time came
+// from; RTC memory survives deep sleep (not a power-on or reset).
+RTC_DATA_ATTR static int s_rtc_source;
+
+static void set_source(Source source)
+{
+    s_source = static_cast<int>(source);
+    s_rtc_source = static_cast<int>(source);
+}
+
+// After a wake-up from deep sleep, the clock still holds the time it had.
+static void restore_source(void)
+{
+    if (esp_reset_reason() == ESP_RST_DEEPSLEEP && time_sync_clock_valid() &&
+        s_rtc_source > static_cast<int>(Source::none) &&
+        s_rtc_source <= static_cast<int>(Source::sntp)) {
+        s_source = s_rtc_source;
+        ESP_LOGI(TAG, "Clock kept across deep sleep (from the %s)",
+                 timepolicy::source_name(static_cast<Source>(s_rtc_source)));
+    } else {
+        s_rtc_source = static_cast<int>(Source::none);
+    }
+}
 
 bool time_sync_clock_valid(void)
 {
@@ -76,7 +101,7 @@ bool time_sync_set(int64_t unix_seconds, Source source)
     if (settimeofday(&now, NULL) != 0) {
         return false;
     }
-    s_source = static_cast<int>(source);
+    set_source(source);
     ESP_LOGI(TAG, "Clock set from the %s: %lld",
              timepolicy::source_name(source), (long long)unix_seconds);
     return true;
@@ -86,7 +111,7 @@ bool time_sync_set(int64_t unix_seconds, Source source)
 // The SNTP client has set the clock itself; this records where it came from.
 static void on_time_synced(struct timeval *tv)
 {
-    s_source = static_cast<int>(Source::sntp);
+    set_source(Source::sntp);
     ESP_LOGI(TAG, "Clock set by SNTP: %lld", (long long)tv->tv_sec);
 }
 
@@ -109,6 +134,7 @@ static void on_ip_event(void *arg, esp_event_base_t base, int32_t id,
 
 esp_err_t time_sync_start(void)
 {
+    restore_source();
     esp_sntp_config_t config =
         ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_TIME_SYNC_SERVER);
     config.wait_for_sync = false;
@@ -128,6 +154,7 @@ esp_err_t time_sync_start(void)
 #else
 esp_err_t time_sync_start(void)
 {
+    restore_source();
     return ESP_OK;
 }
 #endif
