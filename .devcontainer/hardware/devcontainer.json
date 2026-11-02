@@ -7,17 +7,28 @@
 // that enumerate again after a reset (USB-Serial-JTAG), appear without a
 // rebuild. With rootless Docker the container's root is the host user, so the
 // host user needs read and write access to the serial devices; see
-// .devcontainer/hardware/README.md.
+// .devcontainer/hardware/README.md. Apart from that, keep this file in step
+// with ../devcontainer.json.
 {
   "name": "TrailCamHub ESP-IDF (USB boards)",
-  "image": "espressif/idf:v5.5.6",
+  "build": { "dockerfile": "../Dockerfile", "context": ".." },
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
   "workspaceMount": "source=${localWorkspaceFolder},target=/project,type=bind,consistency=cached",
   "workspaceFolder": "/project",
   "remoteUser": "root",
+  "userEnvProbe": "loginInteractiveShell",
   "runArgs": ["--privileged"],
-  "mounts": ["source=/dev,target=/dev,type=bind"],
   "containerEnv": {
-    "IDF_PATH": "/opt/esp/idf"
+    "IDF_PATH": "/opt/esp/idf",
+    "IDF_CCACHE_ENABLE": "1"
   },
-  "postCreateCommand": "bash -lc 'source \"$IDF_PATH/export.sh\" >/dev/null && idf.py --version && ls -l /dev/serial/by-id 2>/dev/null || echo \"No USB serial devices found\"'"
+  "mounts": [
+    "source=/dev,target=/dev,type=bind",
+    "source=trailcamhub-cache,target=/root/.cache,type=volume",
+    "source=trailcamhub-claude,target=/root/.claude,type=volume"
+  ],
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
 }

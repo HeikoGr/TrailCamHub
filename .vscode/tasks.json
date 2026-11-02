@@ -31,6 +31,36 @@
       },
       "problemMatcher": [],
       "group": "build"
+    },
+    {
+      "label": "Host tests",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "cmake -S test/host -B build-host -DCMAKE_BUILD_TYPE=Debug && cmake --build build-host --parallel && ctest --test-dir build-host --output-on-failure"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": "test"
+    },
+    {
+      "label": "Check C/C++ formatting (as in CI)",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "git ls-files '*.c' '*.cpp' '*.h' '*.hpp' | xargs clang-format --dry-run --Werror"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": "test"
     }
   ]
 }

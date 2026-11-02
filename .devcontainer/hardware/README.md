@@ -4,7 +4,8 @@
 It bind-mounts the host's `/dev`, so `idf.py -p /dev/ttyACM0 flash monitor`
 works from inside the container. Choose it with **Dev Containers: Rebuild and
 Reopen in Container**. The default configuration in `.devcontainer/` has no
-device access and is the one Codespaces uses.
+device access and is the one Codespaces uses. Both build the same image
+(`.devcontainer/Dockerfile`) and share the cache volumes.
 
 ## Host setup (Linux)
 

@@ -1,11 +1,25 @@
+// Default dev container (also used by GitHub Codespaces). For flashing boards
+// on USB from the container, use .devcontainer/hardware/devcontainer.json.
 {
   "name": "TrailCamHub ESP-IDF",
-  "image": "espressif/idf:v5.5.6",
+  "build": { "dockerfile": "Dockerfile" },
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
   "workspaceMount": "source=${localWorkspaceFolder},target=/project,type=bind,consistency=cached",
   "workspaceFolder": "/project",
   "remoteUser": "root",
+  "userEnvProbe": "loginInteractiveShell",
   "containerEnv": {
-    "IDF_PATH": "/opt/esp/idf"
+    "IDF_PATH": "/opt/esp/idf",
+    "IDF_CCACHE_ENABLE": "1"
   },
-  "postCreateCommand": "bash -lc 'source \"$IDF_PATH/export.sh\" >/dev/null && idf.py --version'"
+  // Kept across rebuilds: ccache, the ESP-IDF component and pip caches, and
+  // Claude Code's sessions and notes.
+  "mounts": [
+    "source=trailcamhub-cache,target=/root/.cache,type=volume",
+    "source=trailcamhub-claude,target=/root/.claude,type=volume"
+  ],
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
 }
