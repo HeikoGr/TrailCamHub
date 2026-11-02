@@ -7,18 +7,31 @@ namespace camera::artemis
 
 namespace
 {
-constexpr char kHeader[] = "# trailcamhub-catalog v1";
+constexpr char kHeader[] = "# trailcamhub-catalog v2";
+// v1 had the same columns, keyed by dir/num (before #85).
+constexpr char kHeaderV1[] = "# trailcamhub-catalog v1";
+
+bool valid_media_id(std::int64_t id)
+{
+    return id > 0;
 }
+}  // namespace
 
 std::size_t MediaCatalog::merge(const MediaList &list)
 {
+    for (CatalogEntry &e : entries_)
+        e.listed = false;
     std::size_t added = 0;
     for (const MediaItem &item : list.files) {
-        CatalogEntry *e = find(item.dir_num, item.num);
+        if (!valid_media_id(item.id))
+            continue;
+        CatalogEntry *e = find(item.id);
         if (e != nullptr) {
-            e->media_id = item.id;
+            e->dir_num = item.dir_num;
+            e->media_num = item.num;
             e->media_time = item.time;
             e->file_type = item.file_type;
+            e->listed = true;
             continue;
         }
         CatalogEntry n;
@@ -28,51 +41,75 @@ std::size_t MediaCatalog::merge(const MediaList &list)
         n.file_type = item.file_type;
         n.media_time = item.time;
         n.flags = 0;
+        n.listed = true;
         entries_.push_back(n);
         ++added;
     }
     return added;
 }
 
-CatalogEntry *MediaCatalog::find(std::int64_t dir, std::int64_t num)
+CatalogEntry *MediaCatalog::find(std::int64_t media_id)
 {
     for (CatalogEntry &e : entries_) {
-        if (e.dir_num == dir && e.media_num == num)
+        if (e.media_id == media_id)
             return &e;
     }
     return nullptr;
 }
 
-const CatalogEntry *MediaCatalog::find(std::int64_t dir, std::int64_t num) const
+const CatalogEntry *MediaCatalog::find(std::int64_t media_id) const
 {
     for (const CatalogEntry &e : entries_) {
-        if (e.dir_num == dir && e.media_num == num)
+        if (e.media_id == media_id)
             return &e;
     }
     return nullptr;
 }
 
-bool MediaCatalog::set_flag(std::int64_t dir, std::int64_t num, Flag flag)
+const CatalogEntry *MediaCatalog::find_listed(std::int64_t dir,
+                                              std::int64_t num) const
 {
-    CatalogEntry *e = find(dir, num);
+    for (const CatalogEntry &e : entries_) {
+        if (e.listed && e.dir_num == dir && e.media_num == num)
+            return &e;
+    }
+    return nullptr;
+}
+
+const CatalogEntry *MediaCatalog::find_by_dir_num(std::int64_t dir,
+                                                  std::int64_t num) const
+{
+    const CatalogEntry *listed = find_listed(dir, num);
+    if (listed != nullptr)
+        return listed;
+    for (auto it = entries_.rbegin(); it != entries_.rend(); ++it) {
+        if (it->dir_num == dir && it->media_num == num)
+            return &*it;
+    }
+    return nullptr;
+}
+
+bool MediaCatalog::set_flag(std::int64_t media_id, Flag flag)
+{
+    CatalogEntry *e = find(media_id);
     if (e == nullptr)
         return false;
     e->flags |= static_cast<std::uint32_t>(flag);
     return true;
 }
 
-bool MediaCatalog::clear_flag(std::int64_t dir, std::int64_t num, Flag flag)
+bool MediaCatalog::clear_flag(std::int64_t media_id, Flag flag)
 {
-    CatalogEntry *e = find(dir, num);
+    CatalogEntry *e = find(media_id);
     if (e == nullptr)
         return false;
     e->flags &= ~static_cast<std::uint32_t>(flag);
     return true;
 }
 
-bool MediaCatalog::has_flag(std::int64_t dir, std::int64_t num, Flag flag) const
+bool MediaCatalog::has_flag(std::int64_t media_id, Flag flag) const
 {
-    const CatalogEntry *e = find(dir, num);
+    const CatalogEntry *e = find(media_id);
     return e != nullptr && (e->flags & static_cast<std::uint32_t>(flag)) != 0;
 }
 
@@ -80,7 +117,7 @@ std::vector<CatalogEntry> MediaCatalog::missing_thumbnails() const
 {
     std::vector<CatalogEntry> out;
     for (const CatalogEntry &e : entries_) {
-        if ((e.flags & kThumbPresent) == 0)
+        if (e.listed && (e.flags & kThumbPresent) == 0)
             out.push_back(e);
     }
     return out;
@@ -90,7 +127,7 @@ std::vector<CatalogEntry> MediaCatalog::pending_video_requests() const
 {
     std::vector<CatalogEntry> out;
     for (const CatalogEntry &e : entries_) {
-        if ((e.flags & kVideoRequested) != 0 &&
+        if (e.listed && (e.flags & kVideoRequested) != 0 &&
             (e.flags & kFileDownloaded) == 0)
             out.push_back(e);
     }
@@ -106,7 +143,8 @@ std::vector<CatalogEntry> MediaCatalog::missing_downloads(bool photos,
             continue;
         for (const CatalogEntry &e : entries_) {
             const bool is_photo = e.file_type == 0;
-            if (is_photo == want_photos && (e.flags & kFileDownloaded) == 0)
+            if (e.listed && is_photo == want_photos &&
+                (e.flags & kFileDownloaded) == 0)
                 out.push_back(e);
         }
     }
@@ -179,7 +217,7 @@ bool MediaCatalog::parse(const std::string &text)
         if (line.empty())
             continue;
         if (line[0] == '#') {
-            if (line == kHeader)
+            if (line == kHeader || line == kHeaderV1)
                 header_seen = true;
             continue;
         }
@@ -211,6 +249,10 @@ bool MediaCatalog::parse(const std::string &text)
         }
         if (!ok || fi != 6)
             continue;  // skip malformed rows rather than failing the load
+        // Without a valid mediaId a row cannot be addressed; a repeated one
+        // can only come from a damaged file. Keep the first.
+        if (!valid_media_id(field[2]) || find(field[2]) != nullptr)
+            continue;
 
         CatalogEntry e;
         e.dir_num = field[0];
