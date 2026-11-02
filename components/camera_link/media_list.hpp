@@ -24,10 +24,21 @@ struct MediaList {
     std::int64_t count = 0;    // "cnt" reported by the camera
     std::int64_t page_no = 0;  // "pageNo"
     std::int64_t result = -1;  // "result" (0 = success)
+    // "getMediaListRet": 0 on success. Without an SD card the camera answers
+    // -1 with "errorMsg":"Memory card not exist", while "result" stays 0.
+    std::int64_t list_ret = 0;
+    // "errorMsg"; "Success" on success, empty when absent.
+    std::string error_msg;
 };
 
 // Parses a media-list response. Returns false if the mediaFiles array is
-// absent; missing per-item fields default to 0.
+// absent; missing per-item fields default to 0. The paging and error fields
+// are filled in either case.
 bool parse_media_list(const std::string &json, MediaList &out);
+
+// True if the camera reported an error for the media list
+// (getMediaListRet != 0), e.g. when it has no SD card. errorMsg is not used:
+// it is also set on success ("Success").
+bool media_list_failed(const MediaList &list);
 
 }  // namespace camera::artemis

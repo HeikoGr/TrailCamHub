@@ -101,6 +101,17 @@ config CAMERA_THUMBNAIL_SERIAL_PREVIEW
         About 33 KB of log per session; boards with a web UI can show the
         thumbnails from the SD card instead.
 
+config CAMERA_SESSION_IDLE_TIMEOUT_S
+    int "Close the camera session after this many seconds without progress"
+    range 30 600
+    default 60
+    help
+        The camera session is closed when the camera neither answered a
+        request nor sent media data for this long; its heartbeat answers do
+        not count. This ends a session that waits for an answer that never
+        comes, so the camera does not keep its Wi-Fi on until its battery is
+        empty. Keep it above the download stall timeout.
+
 config DIAG_MEMORY_LOG_INTERVAL_S
     int "Memory log interval (seconds)"
     range 0 3600
