@@ -340,8 +340,8 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
                 report.thumbs_not_on_sd++;
                 continue;
             }
-            const std::string path = camera::store::thumbnail_path(
-                result.cam_id, entry->dir_num, entry->media_num);
+            const std::string path =
+                camera::store::thumbnail_path(result.cam_id, upload.media_id);
             const HttpResult put = put_file(upload.url, path);
             if (put.error == ESP_ERR_NOT_FOUND) {
                 report.thumbs_not_on_sd++;

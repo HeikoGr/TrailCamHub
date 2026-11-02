@@ -171,9 +171,10 @@ TEST_CASE("serialize/parse round-trips the catalog")
     cat.set_flag(222, MediaCatalog::kVideoRequested);
 
     const std::string text = cat.serialize();
-    CHECK(text.rfind("# trailcamhub-catalog v2\n", 0) == 0);
+    CHECK(text.rfind("# trailcamhub-catalog v3\n", 0) == 0);
     MediaCatalog loaded;
     REQUIRE(loaded.parse(text));
+    CHECK(loaded.format_version() == 3);
     REQUIRE(loaded.size() == 2);
     const CatalogEntry *e = loaded.find(2180198780);
     REQUIRE(e != nullptr);
@@ -211,19 +212,33 @@ TEST_CASE("parse reads a v1 catalog")
                              "100,42,111,0,1766506634,1\n"
                              "100,43,222,2,1766506600,17\n";
     REQUIRE(cat.parse(text));
+    CHECK(cat.format_version() == 1);
     CHECK(cat.size() == 2);
     CHECK(cat.has_flag(111, MediaCatalog::kThumbPresent));
     CHECK(cat.has_flag(222, MediaCatalog::kReported));
 
-    // Saved again as v2.
-    CHECK(cat.serialize().rfind("# trailcamhub-catalog v2\n", 0) == 0);
+    // Saved again as the current version.
+    CHECK(cat.serialize().rfind("# trailcamhub-catalog v3\n", 0) == 0);
+}
+
+TEST_CASE("parse reports the version it read")
+{
+    MediaCatalog cat;
+    CHECK(cat.format_version() == 0);
+    REQUIRE(cat.parse("# trailcamhub-catalog v2\n100,42,111,0,0,1\n"));
+    CHECK(cat.format_version() == 2);
+    REQUIRE(cat.parse("# trailcamhub-catalog v3\n100,42,111,0,0,1\n"));
+    CHECK(cat.format_version() == MediaCatalog::kFormatVersion);
+    cat.clear();
+    CHECK(cat.format_version() == 0);
 }
 
 TEST_CASE("parse rejects an unknown header and skips bad rows")
 {
     MediaCatalog cat;
     CHECK_FALSE(cat.parse("garbage\n1,2,3,4,5,6\n"));
-    CHECK_FALSE(cat.parse("# trailcamhub-catalog v3\n100,1,111,0,0,0\n"));
+    CHECK_FALSE(cat.parse("# trailcamhub-catalog v4\n100,1,111,0,0,0\n"));
+    CHECK(cat.format_version() == 0);
 
     MediaCatalog cat2;
     const std::string text = "# trailcamhub-catalog v2\n"

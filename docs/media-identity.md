@@ -37,13 +37,13 @@ Checked on hardware by the maintainer (November 2026):
 
 ## Where it applies
 
-| Layer                                                                 | Key         | State |
-| --------------------------------------------------------------------- | ----------- | ----- |
-| Hub catalog (`catalog.csv` v2)                                        | `mediaId`   | done  |
-| Check-in, ack, commands (API v1)                                      | `mediaId`   | done  |
-| Backend: DynamoDB `MEDIA#<mediaId>`, S3 `thumb/<camId>/<mediaId>.jpg` | `mediaId`   | done  |
-| App (`mediaKey()`, video request)                                     | `mediaId`   | done  |
-| Hub SD files (`thumb/`, `media/`)                                     | `dir`/`num` | to do |
+| Layer                                                                 | Key       | State |
+| --------------------------------------------------------------------- | --------- | ----- |
+| Hub catalog (`catalog.csv` v3)                                        | `mediaId` | done  |
+| Check-in, ack, commands (API v1)                                      | `mediaId` | done  |
+| Backend: DynamoDB `MEDIA#<mediaId>`, S3 `thumb/<camId>/<mediaId>.jpg` | `mediaId` | done  |
+| App (`mediaKey()`, video request)                                     | `mediaId` | done  |
+| Hub SD files (`thumb/<mediaId>.jpg`, `media/<mediaId>.<ext>`)         | `mediaId` | done  |
 
 ## Hub catalog
 
@@ -55,11 +55,32 @@ Checked on hardware by the maintainer (November 2026):
   may belong to another recording now.
 - The answer to a thumbnail request names `dir`/`num`; it is matched to the
   listed entry with that `dir`/`num`.
-- `catalog.csv` has the header `# trailcamhub-catalog v2`. The columns did not
-  change (`dir,num,mediaId,fileType,mediaTime,flags`); v1 is read as well and
-  written back as v2. Rows without a valid `mediaId` and repeated `mediaId`s
-  are dropped. Firmware before this change does not read v2 and starts with an
-  empty catalog.
+- `catalog.csv` has the header `# trailcamhub-catalog v3`. The columns never
+  changed (`dir,num,mediaId,fileType,mediaTime,flags`). v1 was keyed by
+  `dir`/`num`; v2 was keyed by `mediaId` but its files were still named by
+  `dir`/`num`. Both are read and written back as v3. Rows without a valid
+  `mediaId` and repeated `mediaId`s are dropped. Older firmware does not read
+  v3 and starts with an empty catalog.
+
+## Hub SD files
+
+- `/sdcard/<camera-id>/thumb/<mediaId>.jpg` and
+  `/sdcard/<camera-id>/media/<mediaId>.<jpg|mp4|mov|avi|bin|h264|aac>`; a video
+  trace is `trace_<mediaId>.csv`. The web UI pairs `media/` and `thumb/` by
+  base name, so it needs no change.
+- Loading a catalog before v3 renames the files once
+  (`media_store.cpp`, plan in `media_files.cpp`), then saves the catalog as v3:
+  - a `dir`/`num` owned by one catalog entry: `<dir>_<num>.<ext>` becomes
+    `<mediaId>.<ext>`;
+  - a `dir`/`num` shared by several entries (possible with v2): which
+    recording the file shows is not known, so its files are removed and those
+    entries lose `kThumbPresent`/`kFileDownloaded`; one still on the camera's
+    card is fetched again;
+  - `.part` files are removed; files of a `dir`/`num` the catalog does not
+    know are left alone;
+  - an entry with `kThumbPresent` whose thumbnail is missing afterwards loses
+    the flag.
+    Running it again finds nothing to rename, so a failed save is harmless.
 
 ## Backend and app
 

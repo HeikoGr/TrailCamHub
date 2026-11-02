@@ -7,8 +7,11 @@ namespace camera::artemis
 
 namespace
 {
-constexpr char kHeader[] = "# trailcamhub-catalog v2";
-// v1 had the same columns, keyed by dir/num (before #85).
+// v3: keyed by mediaId, files on the SD card named by mediaId.
+constexpr char kHeader[] = "# trailcamhub-catalog v3";
+// v2: keyed by mediaId, files still named by dir/num.
+constexpr char kHeaderV2[] = "# trailcamhub-catalog v2";
+// v1: keyed by dir/num (before #85). All versions have the same columns.
 constexpr char kHeaderV1[] = "# trailcamhub-catalog v1";
 
 bool valid_media_id(std::int64_t id)
@@ -191,6 +194,7 @@ std::string MediaCatalog::serialize() const
 bool MediaCatalog::parse(const std::string &text)
 {
     entries_.clear();
+    version_ = 0;
     std::size_t pos = 0;
     bool header_seen = false;
     while (pos < text.size()) {
@@ -204,8 +208,13 @@ bool MediaCatalog::parse(const std::string &text)
         if (line.empty())
             continue;
         if (line[0] == '#') {
-            if (line == kHeader || line == kHeaderV1)
-                header_seen = true;
+            if (line == kHeader)
+                version_ = 3;
+            else if (line == kHeaderV2)
+                version_ = 2;
+            else if (line == kHeaderV1)
+                version_ = 1;
+            header_seen = header_seen || version_ != 0;
             continue;
         }
 
