@@ -43,6 +43,36 @@ void set_web_access(Screen &screen, const WebAccess &web)
     set(screen.hint, web.url != nullptr ? web.url : "");
 }
 
+// The lower lines of an idle screen: the web UI access, or how to search.
+void set_idle_lines(Screen &screen, const WebAccess &web)
+{
+    if (web.ssid == nullptr || web.ssid[0] == '\0') {
+        set(screen.line2, "Press button to");
+        set(screen.line3, "search again");
+        return;
+    }
+    set_web_access(screen, web);
+}
+
+// "Saved 2 of 3 files", or "Camera synced" without downloads.
+void set_media_result(char (&line)[kLineColumns + 1],
+                      const MediaProgress &media)
+{
+    if (media.total == 0) {
+        set(line, "Camera synced");
+        return;
+    }
+    const unsigned long stored =
+        media.stored < kMaxCount ? media.stored : kMaxCount;
+    const unsigned long total =
+        media.total < kMaxCount ? media.total : kMaxCount;
+    // Counts are clamped, so the text fits; the buffer avoids a truncation
+    // warning.
+    char text[48];
+    std::snprintf(text, sizeof(text), "Saved %lu of %lu files", stored, total);
+    set(line, text);
+}
+
 }  // namespace
 
 Screen make_screen(Phase phase, const char *ssid, std::uint32_t retry_in_s,
@@ -98,29 +128,31 @@ Screen make_screen(Phase phase, const char *ssid, std::uint32_t retry_in_s,
         set(screen.hint, "Hold button: stop");
         break;
     }
-    case Phase::finished: {
+    case Phase::finished:
         screen.tone = Tone::ok;
         set(screen.title, "FINISHED");
-        char result[48];
-        if (media.total == 0) {
-            std::snprintf(result, sizeof(result), "Camera synced");
-        } else {
-            const unsigned long stored =
-                media.stored < kMaxCount ? media.stored : kMaxCount;
-            const unsigned long total =
-                media.total < kMaxCount ? media.total : kMaxCount;
-            std::snprintf(result, sizeof(result), "Saved %lu of %lu files",
-                          stored, total);
-        }
-        set(screen.line1, result);
-        if (web.ssid == nullptr || web.ssid[0] == '\0') {
-            set(screen.line2, "Press button to");
-            set(screen.line3, "search again");
-            break;
-        }
-        set_web_access(screen, web);
+        set_media_result(screen.line1, media);
+        set_idle_lines(screen, web);
         break;
-    }
+    case Phase::not_found:
+        screen.tone = Tone::warning;
+        set(screen.title, "NOT FOUND");
+        set(screen.line1, "Camera not reached");
+        set_idle_lines(screen, web);
+        break;
+    case Phase::upload_failed:
+        screen.tone = Tone::warning;
+        set(screen.title, "NO UPLOAD");
+        // Also after an upload-only cycle, which has no media counts.
+        set(screen.line1, "Home Wi-Fi not reached");
+        set_idle_lines(screen, web);
+        break;
+    case Phase::stopped:
+        screen.tone = Tone::neutral;
+        set(screen.title, "STOPPED");
+        set(screen.line1, "Search stopped");
+        set_idle_lines(screen, web);
+        break;
     case Phase::retry_wait:
         screen.tone = Tone::warning;
         set(screen.title, "NO LINK");

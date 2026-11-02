@@ -179,6 +179,12 @@ ui::Phase to_ui_phase(dongle_ui_phase_t phase)
         return ui::Phase::retry_wait;
     case DONGLE_UI_FINISHED:
         return ui::Phase::finished;
+    case DONGLE_UI_NOT_FOUND:
+        return ui::Phase::not_found;
+    case DONGLE_UI_UPLOAD_FAILED:
+        return ui::Phase::upload_failed;
+    case DONGLE_UI_STOPPED:
+        return ui::Phase::stopped;
     case DONGLE_UI_IDLE:
         break;
     }

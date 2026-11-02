@@ -10,7 +10,13 @@ const PHASES = {
   retry_wait: ["NO LINK", "warn", ""],
   uploading: ["UPLOADING", "busy", "Syncing with the backend over the home Wi-Fi."],
   finished: ["FINISHED", "ok", ""],
+  not_found: ["NOT FOUND", "warn", "The camera was not reached. Search again to retry."],
+  upload_failed: ["NO UPLOAD", "warn", "The home Wi-Fi was not reached; the data stays on the SD card."],
+  stopped: ["STOPPED", "idle", "The search was stopped."],
 };
+
+// Phases in which no cycle runs.
+const IDLE_PHASES = ["idle", "finished", "not_found", "upload_failed", "stopped"];
 
 // Path of the log file being written; it cannot be deleted.
 let activeLog = "";
@@ -109,7 +115,7 @@ async function refreshStatus() {
       s.phase,
     );
     $("search").disabled = busy;
-    $("stop").disabled = s.phase === "idle";
+    $("stop").disabled = IDLE_PHASES.includes(s.phase);
   } catch (e) {
     $("offline").hidden = false;
   }

@@ -803,12 +803,18 @@ struct Mp4Cache {
 Mp4Cache s_mp4_cache;
 
 // The camera session writes the SD card at the limit of what it can do, so
-// an MP4 is not built while one runs.
+// an MP4 is not built while one runs. Searching and the uplink count too: they
+// lead to or come from a session.
 bool session_active()
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    const bool active =
-        strcmp(s_phase, "idle") != 0 && strcmp(s_phase, "finished") != 0;
+    bool active = true;
+    for (const char *idle :
+         {"idle", "finished", "not_found", "upload_failed", "stopped"}) {
+        if (strcmp(s_phase, idle) == 0) {
+            active = false;
+        }
+    }
     xSemaphoreGive(s_lock);
     return active;
 }
@@ -1272,7 +1278,7 @@ void web_ui_set_status(const char *phase, const char *ssid,
         s_media_total = 0;
     }
     snprintf(s_phase, sizeof(s_phase), "%s", phase);
-    if (strcmp(phase, "finished") == 0) {
+    if (strcmp(phase, "finished") == 0 || strcmp(phase, "upload_failed") == 0) {
         s_cameras_us = 0;  // the sync time on the card has just changed
     }
     reopen_access_point();

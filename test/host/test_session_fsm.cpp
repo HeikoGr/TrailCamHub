@@ -317,11 +317,14 @@ TEST_CASE("front-end phase follows the state and the last outcome")
     CHECK(front_end_phase(State::idle, Outcome::uplink_done) ==
           FrontEndPhase::finished);
     CHECK(front_end_phase(State::idle, Outcome::camera_unreachable) ==
-          FrontEndPhase::idle);
+          FrontEndPhase::not_found);
     CHECK(front_end_phase(State::idle, Outcome::uplink_unreachable) ==
-          FrontEndPhase::idle);
+          FrontEndPhase::upload_failed);
     CHECK(front_end_phase(State::idle, Outcome::stopped) ==
-          FrontEndPhase::idle);
+          FrontEndPhase::stopped);
+    // While a cycle runs, the last outcome does not matter.
+    CHECK(front_end_phase(State::ble_activation, Outcome::stopped) ==
+          FrontEndPhase::searching);
     CHECK(front_end_phase(State::ble_activation, Outcome::none) ==
           FrontEndPhase::searching);
     CHECK(front_end_phase(State::wifi_join, Outcome::none) ==
@@ -345,4 +348,8 @@ TEST_CASE("front-end phase names stay stable for the console and web UI")
     CHECK(std::string(to_string(FrontEndPhase::retry_wait)) == "retry_wait");
     CHECK(std::string(to_string(FrontEndPhase::uploading)) == "uploading");
     CHECK(std::string(to_string(FrontEndPhase::finished)) == "finished");
+    CHECK(std::string(to_string(FrontEndPhase::not_found)) == "not_found");
+    CHECK(std::string(to_string(FrontEndPhase::upload_failed)) ==
+          "upload_failed");
+    CHECK(std::string(to_string(FrontEndPhase::stopped)) == "stopped");
 }

@@ -56,6 +56,11 @@ typedef enum {
     SESSION_FRONT_END_UPLOADING,
     /* Idle after a cycle with the result CAMERA_SCANNED or UPLINK_DONE. */
     SESSION_FRONT_END_FINISHED,
+    /* Idle after CAMERA_UNREACHABLE, UPLINK_UNREACHABLE or STOPPED; kept until
+     * the next cycle starts. */
+    SESSION_FRONT_END_NOT_FOUND,
+    SESSION_FRONT_END_UPLOAD_FAILED,
+    SESSION_FRONT_END_STOPPED,
 } session_front_end_phase_t;
 
 typedef struct {
@@ -92,7 +97,7 @@ typedef struct {
     /*
      * Stable name of front_end_phase for the console and the web UI JSON:
      * "idle", "searching", "connecting", "connected", "retry_wait",
-     * "uploading" or "finished".
+     * "uploading", "finished", "not_found", "upload_failed" or "stopped".
      */
     const char *front_end_phase_name;
 } session_status_t;

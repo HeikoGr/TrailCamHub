@@ -17,6 +17,33 @@ TEST_CASE("each phase has a title and fitting tone")
     CHECK(ui::make_screen(Phase::connecting, "", 0).tone == Tone::busy);
     CHECK(ui::make_screen(Phase::connected, "", 0).tone == Tone::ok);
     CHECK(ui::make_screen(Phase::retry_wait, "", 0).tone == Tone::warning);
+    CHECK(std::string(ui::make_screen(Phase::not_found, "", 0).title) ==
+          "NOT FOUND");
+    CHECK(ui::make_screen(Phase::not_found, "", 0).tone == Tone::warning);
+    CHECK(std::string(ui::make_screen(Phase::upload_failed, "", 0).title) ==
+          "NO UPLOAD");
+    CHECK(ui::make_screen(Phase::upload_failed, "", 0).tone == Tone::warning);
+    CHECK(std::string(ui::make_screen(Phase::stopped, "", 0).title) ==
+          "STOPPED");
+    CHECK(ui::make_screen(Phase::stopped, "", 0).tone == Tone::neutral);
+}
+
+TEST_CASE("failed and stopped screens name the cause and how to go on")
+{
+    const Screen not_found = ui::make_screen(Phase::not_found, "", 0);
+    CHECK(std::string(not_found.line1) == "Camera not reached");
+    CHECK(std::string(not_found.line2) == "Press button to");
+    CHECK(std::string(not_found.line3) == "search again");
+
+    const Screen upload =
+        ui::make_screen(Phase::upload_failed, "", 0, {2, 2, 2},
+                        {"TrailCamHub-F4A1", "k7m2x9qa3b", "http://10.42.0.1"});
+    CHECK(std::string(upload.line1) == "Home Wi-Fi not reached");
+    CHECK(std::string(upload.line2) == "WiFi TrailCamHub-F4A1");
+    CHECK(std::string(upload.hint) == "http://10.42.0.1");
+
+    CHECK(std::string(ui::make_screen(Phase::stopped, "", 0).line1) ==
+          "Search stopped");
 }
 
 TEST_CASE("camera Wi-Fi name is shown while connecting and connected")
@@ -111,8 +138,10 @@ TEST_CASE("finished screen shows the result and the web UI")
 
 TEST_CASE("all lines fit the screen")
 {
-    for (Phase phase : {Phase::idle, Phase::searching, Phase::connecting,
-                        Phase::connected, Phase::retry_wait, Phase::finished}) {
+    for (Phase phase :
+         {Phase::idle, Phase::searching, Phase::connecting, Phase::connected,
+          Phase::retry_wait, Phase::finished, Phase::not_found,
+          Phase::upload_failed, Phase::stopped}) {
         const Screen screen =
             ui::make_screen(phase, "", 4294967u, {99998, 99998, 99999},
                             {"TrailCamHub-ABCDEFGHIJKLMNOPQRSTUVWXYZ",

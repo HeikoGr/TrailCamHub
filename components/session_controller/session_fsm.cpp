@@ -253,10 +253,20 @@ FrontEndPhase front_end_phase(State state, Outcome last_outcome)
 {
     switch (state) {
     case State::idle:
-        return last_outcome == Outcome::camera_scanned ||
-                       last_outcome == Outcome::uplink_done
-                   ? FrontEndPhase::finished
-                   : FrontEndPhase::idle;
+        switch (last_outcome) {
+        case Outcome::none:
+            return FrontEndPhase::idle;
+        case Outcome::camera_scanned:
+        case Outcome::uplink_done:
+            return FrontEndPhase::finished;
+        case Outcome::camera_unreachable:
+            return FrontEndPhase::not_found;
+        case Outcome::uplink_unreachable:
+            return FrontEndPhase::upload_failed;
+        case Outcome::stopped:
+            return FrontEndPhase::stopped;
+        }
+        return FrontEndPhase::idle;
     case State::ble_activation:
         return FrontEndPhase::searching;
     case State::wifi_join:
@@ -289,6 +299,12 @@ const char *to_string(FrontEndPhase phase)
         return "uploading";
     case FrontEndPhase::finished:
         return "finished";
+    case FrontEndPhase::not_found:
+        return "not_found";
+    case FrontEndPhase::upload_failed:
+        return "upload_failed";
+    case FrontEndPhase::stopped:
+        return "stopped";
     }
     return "idle";
 }
