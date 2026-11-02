@@ -1,6 +1,13 @@
-import type { CameraRecord, CommandRecord, HubRecord, MediaRecord, VideoState } from '../model';
+import type {
+  CameraRecord,
+  CommandRecord,
+  HubRecord,
+  MediaRecord,
+  ScheduleConfig,
+  VideoState,
+} from '../model';
 
-export type HubTelemetry = Partial<Pick<HubRecord, 'firmware' | 'batPercent'>>;
+export type HubTelemetry = Partial<Pick<HubRecord, 'firmware' | 'batPercent' | 'schedule'>>;
 export type CameraTelemetry = Partial<
   Pick<CameraRecord, 'model' | 'firmware' | 'batPercent' | 'sdFreeMB'>
 >;
@@ -10,6 +17,8 @@ export interface Store {
   putHub(hub: HubRecord): Promise<void>;
   getHub(hubId: string): Promise<HubRecord | undefined>;
   updateHub(hubId: string, telemetry: HubTelemetry, lastSeen: number): Promise<void>;
+  /** Replaces the schedule set in the app (an empty object removes it). */
+  setHubScheduleConfig(hubId: string, config: ScheduleConfig): Promise<void>;
 
   /**
    * Creates the camera for `hubId` unless it exists. Returns the stored record

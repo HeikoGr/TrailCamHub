@@ -46,6 +46,8 @@ describe('App', () => {
       listCameras: async () => (await api.listCameras()).slice(0, 1),
       listMedia: (id) => api.listMedia(id),
       requestVideo: (id, item) => api.requestVideo(id, item),
+      readCamera: (id) => api.readCamera(id),
+      setSchedule: (id, config) => api.setSchedule(id, config),
     };
     render(<App api={single} now={() => NOW} />);
     expect(await screen.findByRole('heading', { name: 'Garden' })).toBeInTheDocument();
@@ -80,12 +82,46 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: '← All recordings' })).not.toBeInTheDocument();
   });
 
+  it('shows the schedule and asks for a camera read', async () => {
+    render(<App api={demoApi()} now={() => NOW} />);
+
+    const schedule = await screen.findByRole('region', { name: 'Schedule of Garden hub' });
+    expect(within(schedule).getByText(/in 1 h 43 min/)).toBeInTheDocument();
+    expect(within(schedule).getByText(/in 26 min/)).toBeInTheDocument();
+    expect(within(schedule).getByText(/sleeps between cycles/)).toBeInTheDocument();
+
+    fireEvent.click(within(schedule).getByRole('button', { name: 'Read camera now' }));
+    expect(await within(schedule).findByText(/Read requested/)).toBeInTheDocument();
+    expect(within(schedule).getByRole('button', { name: 'Read camera now' })).toBeDisabled();
+  });
+
+  it('changes the schedule of the hub', async () => {
+    const api = demoApi();
+    render(<App api={api} now={() => NOW} />);
+
+    const schedule = await screen.findByRole('region', { name: 'Schedule of Garden hub' });
+    fireEvent.click(within(schedule).getByRole('button', { name: 'Change schedule' }));
+    fireEvent.change(within(schedule).getByLabelText(/Camera read plan/), {
+      target: { value: '*=60' },
+    });
+    fireEvent.change(within(schedule).getByLabelText(/Check-in every/), {
+      target: { value: '15' },
+    });
+    fireEvent.click(within(schedule).getByRole('button', { name: 'Save for Garden hub' }));
+
+    expect(await within(schedule).findByText(/New schedule saved/)).toBeInTheDocument();
+    const cameras = await api.listCameras();
+    expect(cameras[0]?.hubScheduleConfig).toEqual({ cameraPlan: '*=60', checkinIntervalS: 900 });
+  });
+
   it('shows an error with retry when loading fails', async () => {
     const failing: ApiClient = {
       isDemo: false,
       listCameras: () => Promise.reject(new Error('HTTP 503')),
       listMedia: () => Promise.resolve([]),
       requestVideo: () => Promise.reject(new Error('unused')),
+      readCamera: () => Promise.reject(new Error('unused')),
+      setSchedule: () => Promise.reject(new Error('unused')),
     };
     render(<App api={failing} />);
 

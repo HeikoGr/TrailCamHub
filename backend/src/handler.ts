@@ -49,9 +49,6 @@ function getDeps(): Deps {
     storage: new S3MediaStorage(requireEnv('MEDIA_BUCKET')),
     botToken: () => botToken(),
     now: () => Math.floor(Date.now() / 1000),
-    config: {
-      sleepIntervalS: Number(process.env.SLEEP_INTERVAL_S) || undefined,
-    },
   };
   return deps;
 }

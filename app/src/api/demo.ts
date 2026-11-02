@@ -1,7 +1,25 @@
-import type { ApiClient, Camera, CommandResult, MediaItem } from './types';
+import type {
+  ApiClient,
+  Camera,
+  CommandResult,
+  HubSchedule,
+  MediaItem,
+  ScheduleConfig,
+  ScheduleOrigin,
+} from './types';
 import { toCameraWallClock } from '../format';
 
-const DEMO_HUB = { hubId: 'garden-hub', hubName: 'Garden hub', hubBatPercent: 91 };
+const DEMO_HUB: Pick<
+  Camera,
+  'hubId' | 'hubName' | 'hubBatPercent' | 'hubLastSeen' | 'hubScheduleConfig' | 'readRequested'
+> = {
+  hubId: 'garden-hub',
+  hubName: 'Garden hub',
+  hubBatPercent: 91,
+  hubLastSeen: 0,
+  hubScheduleConfig: {},
+  readRequested: false,
+};
 
 const DEMO_CAMERAS: Array<Camera & { firstNum: number; minutesAgo: number }> = [
   {
@@ -71,6 +89,8 @@ export function buildDemoMedia(now: number, count = 12, firstNum = 36): MediaIte
 export class DemoApiClient implements ApiClient {
   readonly isDemo = true;
   private readonly media = new Map<string, MediaItem[]>();
+  private readonly readRequested = new Set<string>();
+  private scheduleConfig: ScheduleConfig = {};
   private nextCommandId = 1;
 
   constructor(
@@ -84,9 +104,30 @@ export class DemoApiClient implements ApiClient {
 
   async listCameras(): Promise<Camera[]> {
     await this.delay();
-    return DEMO_CAMERAS.map(({ firstNum: _firstNum, minutesAgo, ...camera }) => {
+    const now = this.now();
+    const plan = this.scheduleConfig.cameraPlan;
+    const checkin = this.scheduleConfig.checkinIntervalS;
+    const origin = (set: boolean): ScheduleOrigin => (set ? 'remote' : 'built-in');
+    // The demo hub checked in after the last read and sleeps until the next.
+    const hubSchedule: HubSchedule = {
+      cameraPlan: plan ?? '05:00-09:00=30,17:00-22:00=30,*=120',
+      cameraPlanOrigin: origin(plan !== undefined),
+      checkinIntervalS: checkin ?? 1800,
+      checkinOrigin: origin(checkin !== undefined),
+      nextCameraReadAt: now + 103 * 60,
+      nextCheckinAt: now + 26 * 60,
+      sleeps: true,
+    };
+    return DEMO_CAMERAS.map(({ firstNum: _firstNum, minutesAgo, ...camera }): Camera => {
       void _firstNum;
-      return { ...camera, lastSeen: this.now() - minutesAgo * 60 };
+      return {
+        ...camera,
+        lastSeen: now - minutesAgo * 60,
+        hubLastSeen: now - 4 * 60,
+        hubSchedule: { ...hubSchedule },
+        hubScheduleConfig: { ...this.scheduleConfig },
+        readRequested: this.readRequested.has(camera.camId),
+      };
     });
   }
 
@@ -105,6 +146,21 @@ export class DemoApiClient implements ApiClient {
       target.videoState = 'requested';
     }
     return { id: `demo-${this.nextCommandId++}`, type: 'requestVideo', state: 'queued' };
+  }
+
+  async readCamera(camId: string): Promise<CommandResult> {
+    await this.delay();
+    if (!this.media.has(camId)) {
+      throw new Error(`Unknown camera ${camId}`);
+    }
+    this.readRequested.add(camId);
+    return { id: `demo-${this.nextCommandId++}`, type: 'readCamera', state: 'queued' };
+  }
+
+  async setSchedule(_hubId: string, config: ScheduleConfig): Promise<ScheduleConfig> {
+    await this.delay();
+    this.scheduleConfig = { ...config };
+    return { ...config };
   }
 
   private delay(): Promise<void> {

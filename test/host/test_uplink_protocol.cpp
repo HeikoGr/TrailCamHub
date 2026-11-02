@@ -65,12 +65,15 @@ TEST_CASE("check-in response is read per camera")
         "\"thumbUploads\":[],\"commands\":[]},"
         "{\"camId\":\"OTHER\",\"accepted\":false,\"resync\":false,"
         "\"thumbUploads\":[],\"commands\":[]}],"
-        "\"config\":{\"sleepIntervalS\":1800}}";
+        "\"config\":{\"cameraPlan\":\"05:00-09:00=30,*=120\","
+        "\"checkinIntervalS\":1800}}";
 
     CheckinResponse response;
     REQUIRE(parse_checkin_response(json, response));
     CHECK(response.server_time == 1766506000);
-    CHECK(response.sleep_interval_s == 1800);
+    CHECK(response.has_camera_plan);
+    CHECK(response.camera_plan == "05:00-09:00=30,*=120");
+    CHECK(response.checkin_interval_s == 1800);
     REQUIRE(response.cameras.size() == 3);
 
     const CameraCheckin &garden = response.cameras[0];
@@ -88,6 +91,42 @@ TEST_CASE("check-in response is read per camera")
     CHECK(response.cameras[1].resync);
     CHECK(response.cameras[1].thumb_uploads.empty());
     CHECK_FALSE(response.cameras[2].accepted);
+}
+
+TEST_CASE("a check-in response without a schedule leaves it to the hub")
+{
+    CheckinResponse response;
+    REQUIRE(parse_checkin_response(
+        "{\"serverTime\":1,\"cameras\":[],\"config\":{\"cameraPlan\":null,"
+        "\"checkinIntervalS\":null}}",
+        response));
+    CHECK_FALSE(response.has_camera_plan);
+    CHECK(response.checkin_interval_s == -1);
+    // An older backend.
+    REQUIRE(parse_checkin_response(
+        "{\"serverTime\":1,\"cameras\":[],\"config\":{\"sleepIntervalS\":"
+        "1800}}",
+        response));
+    CHECK_FALSE(response.has_camera_plan);
+    CHECK(response.checkin_interval_s == -1);
+}
+
+TEST_CASE("the check-in carries the schedule")
+{
+    CheckinRequest request;
+    request.hub_firmware = "dev";
+    request.schedule.present = true;
+    request.schedule.camera_plan = "05:00-09:00=30,*=120";
+    request.schedule.camera_plan_origin = "remote";
+    request.schedule.checkin_interval_s = 1800;
+    request.schedule.checkin_origin = "built-in";
+    request.schedule.next_camera_read_at = 1766506000;
+    request.schedule.sleeps = true;
+    CHECK(build_checkin_json(request) ==
+          "{\"hubFirmware\":\"dev\",\"schedule\":{\"cameraPlan\":"
+          "\"05:00-09:00=30,*=120\",\"cameraPlanOrigin\":\"remote\","
+          "\"checkinIntervalS\":1800,\"checkinOrigin\":\"built-in\","
+          "\"nextCameraReadAt\":1766506000,\"sleeps\":true},\"cameras\":[]}");
 }
 
 TEST_CASE("brackets inside strings and entries without camId")

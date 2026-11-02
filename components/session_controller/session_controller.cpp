@@ -74,7 +74,6 @@ QueueHandle_t s_events;
 QueueHandle_t s_session_requests;
 QueueHandle_t s_uplink_requests;
 esp_timer_handle_t s_timer;
-esp_timer_handle_t s_auto_scan_timer;
 std::atomic<std::uint32_t> s_timer_generation;
 // Mirrors the FSM state for other tasks (console requests, status).
 std::atomic<session::State> s_state{session::State::idle};
@@ -86,6 +85,11 @@ char s_password[MAX_PASSWORD_LEN + 1];
 esp_ip4_addr_t s_gateway;
 // Settings read when the current cycle started (home Wi-Fi, backend).
 hub_config::Settings s_settings;
+
+// Outcome of the camera session and the sync of the running cycle; only
+// touched by the controller task.
+bool s_camera_ok;
+bool s_sync_ok;
 
 // Published status; written by the controller task, read by any task.
 SemaphoreHandle_t s_status_lock;
@@ -196,6 +200,8 @@ void publish_status(const session::Result &result)
         s_status.last_result_name = session::to_string(session::Outcome::none);
         s_status.camera_ssid[0] = '\0';
     }
+    s_status.camera_ok = s_camera_ok;
+    s_status.sync_ok = s_sync_ok;
     if (s_status.cycle_finished) {
         s_status.last_result = result_of(result.outcome);
         s_status.last_result_name = session::to_string(result.outcome);
@@ -254,14 +260,6 @@ void on_wifi_failed(std::uint8_t reason)
     QueuedEvent event = make_event(session::Event::wifi_failed);
     event.reason = reason;
     post_event(event);
-}
-
-void on_auto_scan_timer(void *arg)
-{
-    (void)arg;
-    if (s_state.load() == session::State::idle) {
-        post_event(make_event(session::Event::scan_requested));
-    }
 }
 
 void on_timer(void *arg)
@@ -398,9 +396,6 @@ void load_settings_for_cycle()
 void controller_task(void *arg)
 {
     (void)arg;
-#if CONFIG_SESSION_SCAN_ON_BOOT
-    post_event(make_event(session::Event::scan_requested));
-#endif
     QueuedEvent event;
     while (true) {
         xQueueReceive(s_events, &event, portMAX_DELAY);
@@ -416,6 +411,19 @@ void controller_task(void *arg)
         wipe(event.password, sizeof(event.password));
         if (event.type == session::Event::wifi_connected) {
             s_gateway = event.gateway;
+        }
+        if (!s_fsm.busy() && (event.type == session::Event::scan_requested ||
+                              event.type == session::Event::upload_requested)) {
+            s_camera_ok = false;
+            s_sync_ok = false;
+        }
+        if (event.type == session::Event::session_ended &&
+            s_fsm.state() == session::State::session && !s_fsm.stop_pending()) {
+            s_camera_ok = event.error == ESP_OK;
+        }
+        if (event.type == session::Event::uplink_done &&
+            s_fsm.state() == session::State::uplink) {
+            s_sync_ok = event.error == ESP_OK;
         }
         if (!s_fsm.busy() && (event.type == session::Event::scan_requested ||
                               event.type == session::Event::upload_requested)) {
@@ -490,15 +498,6 @@ esp_err_t session_controller_init(void)
     };
     ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_timer), TAG,
                         "Could not create session timer");
-    const esp_timer_create_args_t auto_scan_args = {
-        .callback = on_auto_scan_timer,
-        .arg = NULL,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "auto_scan",
-        .skip_unhandled_events = true,
-    };
-    ESP_RETURN_ON_ERROR(esp_timer_create(&auto_scan_args, &s_auto_scan_timer),
-                        TAG, "Could not create auto-scan timer");
 
     static const camera_wifi_callbacks_t wifi_callbacks = {
         .on_connected = on_wifi_connected,
@@ -525,19 +524,10 @@ esp_err_t session_controller_start(void)
         ESP_LOGE(TAG, "Could not create session tasks");
         return ESP_ERR_NO_MEM;
     }
-#if CONFIG_SESSION_AUTO_SCAN_INTERVAL_MIN > 0
-    ESP_RETURN_ON_ERROR(
-        esp_timer_start_periodic(
-            s_auto_scan_timer,
-            (std::uint64_t)CONFIG_SESSION_AUTO_SCAN_INTERVAL_MIN * 60u *
-                1000000u),
-        TAG, "Could not start auto-scan timer");
-#endif
     ESP_LOGI(TAG,
              "Session controller idle; waiting for a scan request "
-             "(%u attempts, auto scan every %u min, 0 = off)",
-             (unsigned)CONFIG_SESSION_MAX_ATTEMPTS,
-             (unsigned)CONFIG_SESSION_AUTO_SCAN_INTERVAL_MIN);
+             "(%u attempts)",
+             (unsigned)CONFIG_SESSION_MAX_ATTEMPTS);
     return ESP_OK;
 }
 

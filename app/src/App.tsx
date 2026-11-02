@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiClient } from './api';
-import type { Camera, MediaItem } from './api/types';
+import type { Camera, MediaItem, ScheduleConfig } from './api/types';
 import { CameraPicker } from './components/CameraPicker';
 import { MediaDetail } from './components/MediaDetail';
 import { MediaGrid } from './components/MediaGrid';
+import { ScheduleCard } from './components/ScheduleCard';
 import { StatusCard } from './components/StatusCard';
 import { mediaKey } from './format';
 import { getUser, hapticSuccess, isInTelegram, notify, type TelegramWebApp } from './telegram';
@@ -141,6 +142,42 @@ export function App({ api, webApp, now = unixNow }: Props) {
     }
   };
 
+  // Changes the loaded cameras in place after a request succeeded.
+  const updateCameras = (change: (c: Camera) => Camera) =>
+    setLoad((current) =>
+      current.status === 'ready' ? { ...current, cameras: current.cameras.map(change) } : current,
+    );
+
+  const readCamera = async () => {
+    if (!camera) return;
+    const target = camera.camId;
+    setBusy(true);
+    try {
+      await api.readCamera(target);
+      updateCameras((c) => (c.camId === target ? { ...c, readRequested: true } : c));
+      hapticSuccess(webApp);
+    } catch (error) {
+      notify(`Request failed: ${message(error)}`, webApp);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveSchedule = async (config: ScheduleConfig) => {
+    if (!camera) return;
+    const hubId = camera.hubId;
+    setBusy(true);
+    try {
+      const stored = await api.setSchedule(hubId, config);
+      updateCameras((c) => (c.hubId === hubId ? { ...c, hubScheduleConfig: stored } : c));
+      hapticSuccess(webApp);
+    } catch (error) {
+      notify(`Saving failed: ${message(error)}`, webApp);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="app">
       <header className="topbar">
@@ -186,6 +223,14 @@ export function App({ api, webApp, now = unixNow }: Props) {
         <>
           <CameraPicker cameras={load.cameras} selected={camera.camId} onSelect={selectCamera} />
           <StatusCard camera={camera} now={now()} />
+          <ScheduleCard
+            key={camera.hubId}
+            camera={camera}
+            now={now()}
+            busy={busy}
+            onReadNow={() => void readCamera()}
+            onSaveSchedule={(config) => void saveSchedule(config)}
+          />
           <h2 className="section-title">Recordings</h2>
           {media.status === 'loading' && <p className="hint">Loading recordings…</p>}
           {media.status === 'error' && (

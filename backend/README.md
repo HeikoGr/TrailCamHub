@@ -38,6 +38,8 @@ Everything is defined in [`template.yaml`](template.yaml) (AWS SAM).
 | GET    | `/v1/cameras`                  | `tma <initData>`       | Cameras linked to the Telegram user          |
 | GET    | `/v1/cameras/{camId}/media`    | `tma <initData>`       | Recordings with uploaded thumbnails          |
 | POST   | `/v1/cameras/{camId}/commands` | `tma <initData>`       | `{"type":"requestVideo","dir":100,"num":35}` |
+| POST   | `/v1/cameras/{camId}/commands` | `tma <initData>`       | `{"type":"readCamera"}`                      |
+| PUT    | `/v1/hubs/{hubId}/schedule`    | `tma <initData>`       | Wake-up schedule of a hub (see below)        |
 | POST   | `/v1/device/checkin`           | `Bearer <hubId>.<key>` | Telemetry + media of all cameras (batch)     |
 | POST   | `/v1/device/ack`               | `Bearer <hubId>.<key>` | Confirm uploaded thumbnails and commands     |
 
@@ -52,6 +54,15 @@ request (and TLS handshake) however many cameras there are — important over LT
    {
      "hubFirmware": "0.5.0",
      "hubBatPercent": 91,
+     "schedule": {
+       "cameraPlan": "05:00-09:00=30,*=120",
+       "cameraPlanOrigin": "remote",
+       "checkinIntervalS": 1800,
+       "checkinOrigin": "built-in",
+       "nextCameraReadAt": 1766509500,
+       "nextCheckinAt": 1766507700,
+       "sleeps": true
+     },
      "cameras": [
        {
          "camId": "F4C15606ED3B",
@@ -88,9 +99,18 @@ request (and TLS handshake) however many cameras there are — important over LT
          "commands": [{ "id": "…", "type": "requestVideo", "dir": 100, "num": 35 }]
        }
      ],
-     "config": { "sleepIntervalS": 1800 }
+     "config": { "cameraPlan": "05:00-09:00=30,*=120" }
    }
    ```
+
+   - `schedule` (request): the hub's wake-up schedule in effect and where each
+     setting comes from (`built-in` profile default, `local` setting on the hub,
+     `remote` from this backend), and the planned next camera read and check-in
+     (Unix seconds, absent without a valid clock or if none is planned). Shown in
+     the app; implausible values are dropped.
+   - `config` (response): the schedule set in the app for this hub
+     (`cameraPlan`, `checkinIntervalS`); a missing field leaves the setting to the
+     hub. See [docs/power-and-schedule.md](../docs/power-and-schedule.md).
 
    - `thumbUploads`: missing thumbnails, newest first over all cameras, at most 30
      per check-in, each with a presigned `PUT` URL.
@@ -115,6 +135,18 @@ request (and TLS handshake) however many cameras there are — important over LT
 
    The backend checks S3 before marking a thumbnail as present, and only then does
    it appear in the app. Commands are re-sent at every check-in until acknowledged.
+   A hub acknowledges `readCamera` at the check-in after it has tried the read
+   (`done` or `failed`); it reads the camera right after the check-in that brought
+   the command.
+
+### Hub schedule
+
+`PUT /v1/hubs/{hubId}/schedule` with `{"cameraPlan": "05:00-09:00=30,*=120",
+"checkinIntervalS": 900}` replaces the schedule set in the app for a hub the user
+is linked to. `null` or a missing field hands that setting back to the hub. The
+plan is validated and normalized like on the hub (time windows with an interval
+in minutes, `*` for the rest of the day, `off` for no reads); check-in intervals
+are 300–86400 seconds. The hub takes the change at its next check-in.
 
 `serverTime` lets the hub set its clock (and the camera's `utcTime`).
 

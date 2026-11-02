@@ -30,6 +30,24 @@ export function formatRelative(unixSeconds: number, nowSeconds: number): string 
   return days === 1 ? '1 day ago' : `${days} days ago`;
 }
 
+/**
+ * A planned time: "in 26 min (14:03)", "in 1 h 43 min (15:20)", or "due now"
+ * once it has passed (a sleeping hub catches up when it wakes). The clock
+ * time is in the browser's time zone.
+ */
+export function formatUpcoming(unixSeconds: number, nowSeconds: number, locale?: string): string {
+  const diff = unixSeconds - nowSeconds;
+  if (diff < 60) return 'due now';
+  const minutes = Math.round(diff / 60);
+  const hours = Math.floor(minutes / 60);
+  const span = hours > 0 ? `${hours} h ${minutes % 60} min` : `${minutes} min`;
+  const clock = new Date(unixSeconds * 1000).toLocaleTimeString(locale, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `in ${span} (${clock})`;
+}
+
 const DATE_TIME: Intl.DateTimeFormatOptions = {
   day: '2-digit',
   month: '2-digit',

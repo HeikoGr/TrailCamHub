@@ -16,6 +16,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
@@ -31,7 +32,9 @@
 // Longer lines are cut; ESP-IDF log lines are well below this.
 #define SD_LOG_LINE_MAX 256
 #define SD_LOG_WRITE_CHUNK 4096
-#define SD_LOG_FLUSH_INTERVAL_MS 1000
+#define SD_LOG_FLUSH_INTERVAL_MS (CONFIG_SD_LOG_FLUSH_INTERVAL_S * 1000)
+// The writer looks for new lines and flush requests this often.
+#define SD_LOG_POLL_MS 250
 #define SD_LOG_TASK_STACK 4096
 #define SD_LOG_TASK_PRIORITY 2
 #define SD_LOG_MAX_PATH 64
@@ -50,6 +53,9 @@ char s_path[SD_LOG_MAX_PATH];
 unsigned s_file_number;
 FILE *s_file;
 size_t s_file_size;
+// sd_log_flush(): set by the caller, answered by the writer.
+std::atomic<bool> s_flush_requested;
+SemaphoreHandle_t s_flushed;
 
 int log_vprintf(const char *format, va_list args)
 {
@@ -132,6 +138,25 @@ unsigned prune_files(unsigned keep)
     return highest;
 }
 
+// Opens file `number` for appending.
+bool open_file(unsigned number)
+{
+    char path[SD_LOG_MAX_PATH];
+    make_path(path, sizeof(path), number);
+    s_file = fopen(path, "a");
+    if (s_file == NULL) {
+        // Not logged: the message would only go into the buffer again.
+        return false;
+    }
+    struct stat info;
+    s_file_size = stat(path, &info) == 0 ? (size_t)info.st_size : 0;
+    s_file_number = number;
+    xSemaphoreTake(s_path_lock, portMAX_DELAY);
+    memcpy(s_path, path, sizeof(s_path));
+    xSemaphoreGive(s_path_lock);
+    return true;
+}
+
 bool open_next_file()
 {
     if (s_file != NULL) {
@@ -140,19 +165,34 @@ bool open_next_file()
     }
     // Keep one slot free for the new file.
     prune_files(CONFIG_SD_LOG_MAX_FILES - 1);
-    char path[SD_LOG_MAX_PATH];
-    make_path(path, sizeof(path), s_file_number + 1);
-    s_file = fopen(path, "a");
-    if (s_file == NULL) {
-        // Not logged: the message would only go into the buffer again.
+    return open_file(s_file_number + 1);
+}
+
+// After a wake-up from deep sleep the log goes on in the newest file, so a
+// sleeping hub does not start a file per wake-up and push out the older ones.
+bool continue_last_file(unsigned highest)
+{
+    if (highest == 0 || esp_reset_reason() != ESP_RST_DEEPSLEEP) {
         return false;
     }
-    s_file_number++;
-    s_file_size = 0;
-    xSemaphoreTake(s_path_lock, portMAX_DELAY);
-    memcpy(s_path, path, sizeof(s_path));
-    xSemaphoreGive(s_path_lock);
-    return true;
+    char path[SD_LOG_MAX_PATH];
+    make_path(path, sizeof(path), highest);
+    struct stat info;
+    if (stat(path, &info) != 0 ||
+        (size_t)info.st_size >= CONFIG_SD_LOG_MAX_FILE_KB * 1024u) {
+        return false;
+    }
+    return open_file(highest);
+}
+
+// Writes everything buffered so far and syncs it to the card.
+void sync_file()
+{
+    if (s_file != NULL && (fflush(s_file) != 0 || fsync(fileno(s_file)) != 0)) {
+        // The data did not reach the card: continue in a new file.
+        fclose(s_file);
+        s_file = NULL;
+    }
 }
 
 void write_bytes(const void *data, size_t size)
@@ -175,14 +215,26 @@ void writer_task(void *arg)
     TickType_t last_flush = xTaskGetTickCount();
     bool dirty = false;
     while (true) {
+        // Lines go to the file's buffer as they come; the card is synced
+        // once per interval, or at once when a flush is requested (the wait
+        // is short so that the request is seen quickly).
         size_t size = 0;
         void *data = xRingbufferReceiveUpTo(
-            s_ring, &size, pdMS_TO_TICKS(SD_LOG_FLUSH_INTERVAL_MS),
-            SD_LOG_WRITE_CHUNK);
+            s_ring, &size, pdMS_TO_TICKS(SD_LOG_POLL_MS), SD_LOG_WRITE_CHUNK);
         if (data != NULL) {
             write_bytes(data, size);
             vRingbufferReturnItem(s_ring, data);
             dirty = true;
+        }
+        const bool flush_now = s_flush_requested.load();
+        if (flush_now) {
+            // Everything logged up to the request.
+            while ((data = xRingbufferReceiveUpTo(
+                        s_ring, &size, 0, SD_LOG_WRITE_CHUNK)) != NULL) {
+                write_bytes(data, size);
+                vRingbufferReturnItem(s_ring, data);
+                dirty = true;
+            }
         }
         const unsigned dropped = s_dropped.exchange(0);
         if (dropped > 0) {
@@ -193,20 +245,22 @@ void writer_task(void *arg)
             dirty = true;
         }
         const TickType_t now = xTaskGetTickCount();
-        if (dirty &&
-            now - last_flush >= pdMS_TO_TICKS(SD_LOG_FLUSH_INTERVAL_MS)) {
-            if (s_file != NULL &&
-                (fflush(s_file) != 0 || fsync(fileno(s_file)) != 0)) {
-                // The data did not reach the card: continue in a new file.
-                fclose(s_file);
-                s_file = NULL;
-            }
-            last_flush = now;
+        if (!flush_now &&
+            now - last_flush < pdMS_TO_TICKS(SD_LOG_FLUSH_INTERVAL_MS)) {
+            continue;
+        }
+        last_flush = now;
+        if (dirty) {
+            sync_file();
             dirty = false;
             if (s_file == NULL ||
                 s_file_size >= CONFIG_SD_LOG_MAX_FILE_KB * 1024u) {
                 open_next_file();
             }
+        }
+        if (flush_now) {
+            s_flush_requested = false;
+            xSemaphoreGive(s_flushed);
         }
     }
 }
@@ -216,7 +270,8 @@ void writer_task(void *arg)
 esp_err_t sd_log_init(void)
 {
     s_path_lock = xSemaphoreCreateMutex();
-    if (s_path_lock == NULL) {
+    s_flushed = xSemaphoreCreateBinary();
+    if (s_path_lock == NULL || s_flushed == NULL) {
         return ESP_ERR_NO_MEM;
     }
     // Prefer PSRAM; without it a smaller buffer in internal RAM.
@@ -245,7 +300,7 @@ esp_err_t sd_log_start(void)
         return ESP_FAIL;
     }
     s_file_number = prune_files(CONFIG_SD_LOG_MAX_FILES);
-    if (!open_next_file()) {
+    if (!continue_last_file(s_file_number) && !open_next_file()) {
         ESP_LOGW(TAG, "Could not open a log file in %s", SD_LOG_DIR);
         sd_log_disable();
         return ESP_FAIL;
@@ -276,4 +331,16 @@ void sd_log_current_path(char *path, size_t size)
     xSemaphoreTake(s_path_lock, portMAX_DELAY);
     snprintf(path, size, "%s", s_path);
     xSemaphoreGive(s_path_lock);
+}
+
+esp_err_t sd_log_flush(uint32_t timeout_ms)
+{
+    if (!s_enabled.load() || s_flushed == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    xSemaphoreTake(s_flushed, 0);  // an old answer
+    s_flush_requested = true;
+    return xSemaphoreTake(s_flushed, pdMS_TO_TICKS(timeout_ms)) == pdTRUE
+               ? ESP_OK
+               : ESP_ERR_TIMEOUT;
 }

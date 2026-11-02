@@ -8,7 +8,14 @@ import {
   UpdateCommand,
   type QueryCommandInput,
 } from '@aws-sdk/lib-dynamodb';
-import type { CameraRecord, CommandRecord, HubRecord, MediaRecord, VideoState } from '../model';
+import type {
+  CameraRecord,
+  CommandRecord,
+  HubRecord,
+  MediaRecord,
+  ScheduleConfig,
+  VideoState,
+} from '../model';
 import type { CameraTelemetry, HubTelemetry, Store } from './types';
 
 /*
@@ -67,6 +74,10 @@ export class DynamoStore implements Store {
 
   async updateHub(hubId: string, telemetry: HubTelemetry, lastSeen: number): Promise<void> {
     await this.updateFields(hubPk(hubId), 'META', { ...telemetry, lastSeen });
+  }
+
+  async setHubScheduleConfig(hubId: string, config: ScheduleConfig): Promise<void> {
+    await this.updateFields(hubPk(hubId), 'META', { scheduleConfig: config });
   }
 
   // ---- Cameras -------------------------------------------------------------

@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <time.h>
 
 #include "esp_check.h"
 #include "esp_heap_caps.h"
@@ -32,6 +33,7 @@
 #include "command_parser.hpp"
 #include "diagnostics.hpp"
 #include "hub_config.hpp"
+#include "schedule_state.hpp"
 #include "sd_card.h"
 #include "session_controller.h"
 
@@ -229,11 +231,71 @@ void print_settings()
                                         : "incomplete"));
 }
 
+// "in 1234 s (2026-11-02 15:20)", "in 1234 s" without a clock, or "never".
+std::string when(std::int64_t t, std::int64_t now)
+{
+    if (t == schedule::kNever) {
+        return "never";
+    }
+    std::string text =
+        "in " + std::to_string((long long)(t > now ? t - now : 0)) + " s";
+    const std::int64_t unix_time = schedule::to_unix(t);
+    if (unix_time > 0) {
+        const time_t wall = static_cast<time_t>(unix_time);
+        struct tm local = {};
+        localtime_r(&wall, &local);
+        char date[24];
+        strftime(date, sizeof(date), "%Y-%m-%d %H:%M", &local);
+        text += std::string(" (") + date + ")";
+    }
+    return text;
+}
+
+// The profile, the schedule that applies and the next cycles.
+void print_schedule()
+{
+    const schedule::Effective effective = schedule::effective();
+    const schedule::Times times = schedule::next_times(effective);
+    const schedule::State state = schedule::state();
+    const std::int64_t now = schedule::now();
+#if CONFIG_HUB_PROFILE_AUTONOMOUS
+    const char *profile = "autonomous";
+#else
+    const char *profile = "on-site";
+#endif
+#if CONFIG_POWER_DEEP_SLEEP
+    const char *sleep = "deep sleep between cycles";
+#else
+    const char *sleep = "stays awake";
+#endif
+    reply("INFO", std::string("profile ") + profile + ", " + sleep);
+    reply("INFO", "camera plan " + effective.camera_plan + " (" +
+                      schedule::origin_name(effective.camera_plan_origin) +
+                      ")");
+    reply("INFO",
+          "check-in every " + std::to_string(effective.checkin_min) + " min (" +
+              schedule::origin_name(effective.checkin_origin) +
+              (effective.settings.uplink ? ")" : ", no uplink settings)"));
+    reply("INFO", "next camera read " + when(times.camera, now));
+    reply("INFO", "next check-in " + when(times.checkin, now));
+    if (state.camera_failures > 0 || state.checkin_failures > 0) {
+        reply("INFO", format_line("failed in a row: %u camera reads, %u "
+                                  "check-ins",
+                                  (unsigned)state.camera_failures,
+                                  (unsigned)state.checkin_failures));
+    }
+    if (state.camera_battery >= 0) {
+        reply("INFO",
+              format_line("camera battery %d%%", (int)state.camera_battery));
+    }
+}
+
 void print_status()
 {
     reply("STATE", session_controller_state_name());
     print_settings();
     print_details();
+    print_schedule();
 }
 
 void request_cycle(esp_err_t error, const char *what)
@@ -396,6 +458,8 @@ void console_task(void *arg)
         if (command.type == hub_console::CommandType::empty) {
             continue;
         }
+        // Someone is using the hub: no deep sleep for a while.
+        schedule::note_activity();
         execute(command);
         // Ends every reply, so that a script knows when to stop reading.
         reply("DONE", "");

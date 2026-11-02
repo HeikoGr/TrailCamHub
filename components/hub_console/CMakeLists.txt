@@ -10,5 +10,6 @@ idf_component_register(SRCS ${srcs}
                        PRIV_INCLUDE_DIRS "."
                        PRIV_REQUIRES esp_driver_uart esp_driver_usb_serial_jtag
                                      esp_rom esp_timer fatfs heap hub_config
-                                     mbedtls sd_log sd_storage
+                                     mbedtls schedule schedule_state sd_log
+                                     sd_storage
                                      session_controller vfs)

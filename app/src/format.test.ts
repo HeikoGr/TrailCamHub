@@ -6,6 +6,7 @@ import {
   formatDateTime,
   formatRelative,
   formatStorage,
+  formatUpcoming,
   mediaKey,
   toCameraWallClock,
   videoStateLabel,
@@ -90,5 +91,14 @@ describe('formatCameraTime', () => {
         formatDateTime(instant, 'en-GB'),
       );
     }
+  });
+});
+
+describe('formatUpcoming', () => {
+  it('says how long until a planned time', () => {
+    expect(formatUpcoming(1_000 + 26 * 60, 1_000, 'en-GB')).toMatch(/^in 26 min \(\d\d:\d\d\)$/);
+    expect(formatUpcoming(1_000 + 103 * 60, 1_000, 'en-GB')).toMatch(/^in 1 h 43 min /);
+    expect(formatUpcoming(1_000 + 30, 1_000)).toBe('due now');
+    expect(formatUpcoming(500, 1_000)).toBe('due now');
   });
 });

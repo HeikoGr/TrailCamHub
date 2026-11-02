@@ -3,7 +3,9 @@
  * (with the Ethernet uplink on boards that have one) and the SD card, brings
  * the firmware of a Wi-Fi/BLE co-processor up to date, then starts the
  * session controller, which runs a camera/uplink cycle when one is requested,
- * the serial console, which accepts those requests and the hub settings, and,
+ * the scheduler, which requests cycles on schedule and puts the hub to sleep
+ * in between (autonomous profile), the serial console, which accepts those
+ * requests and the hub settings, and,
  * on the LilyGO T-Dongle, the display and button as a further front end of
  * the session controller.
  * The BLE stack is started by the camera BLE module when it is needed.
@@ -25,6 +27,8 @@
 #include "dongle_ui.h"
 #include "ethernet_uplink.h"
 #include "hub_console.h"
+#include "schedule_state.hpp"
+#include "scheduler.h"
 #include "sd_card.h"
 #include "sd_log.h"
 #include "session_controller.h"
@@ -145,6 +149,9 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(error);
 
+    // Restores the schedule after a wake-up from deep sleep.
+    schedule::init();
+
     error = diagnostics_start();
     if (error != ESP_OK) {
         ESP_LOGW(TAG, "Diagnostics are incomplete: %s", esp_err_to_name(error));
@@ -240,6 +247,14 @@ extern "C" void app_main(void)
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "Could not start the session controller: %s",
                  esp_err_to_name(error));
+    } else {
+        // Reads the cameras and checks in on schedule, and sleeps in between
+        // with the autonomous profile.
+        error = scheduler_start();
+        if (error != ESP_OK) {
+            ESP_LOGE(TAG, "Could not start the scheduler: %s",
+                     esp_err_to_name(error));
+        }
     }
 
     error = hub_console_start();

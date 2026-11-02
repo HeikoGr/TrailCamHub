@@ -1,4 +1,11 @@
-import type { CameraRecord, CommandRecord, HubRecord, MediaRecord, VideoState } from '../model';
+import type {
+  CameraRecord,
+  CommandRecord,
+  HubRecord,
+  MediaRecord,
+  ScheduleConfig,
+  VideoState,
+} from '../model';
 import { mediaKey } from '../model';
 import type { CameraTelemetry, HubTelemetry, Store } from './types';
 
@@ -29,6 +36,12 @@ export class MemoryStore implements Store {
     const hub = this.hubs.get(hubId);
     if (!hub) throw new Error(`Unknown hub ${hubId}`);
     this.hubs.set(hubId, { ...hub, ...defined(telemetry), lastSeen });
+  }
+
+  async setHubScheduleConfig(hubId: string, config: ScheduleConfig): Promise<void> {
+    const hub = this.hubs.get(hubId);
+    if (!hub) throw new Error(`Unknown hub ${hubId}`);
+    this.hubs.set(hubId, { ...hub, scheduleConfig: defined(config) });
   }
 
   async claimCamera(camId: string, hubId: string) {

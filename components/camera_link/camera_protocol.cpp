@@ -347,6 +347,8 @@ static std::vector<camera::artemis::CatalogEntry> s_thumb_queue;
 static size_t s_thumb_index;
 static bool s_thumb_emitted;
 static bool s_work_done;
+// Battery of the camera of the last session; read by other tasks.
+static std::atomic<int> s_last_battery_percent{-1};
 static camera::artemis::BulkReassembler s_bulk;
 static uint8_t s_bulk_subtype;
 // Bulk frames received but not yet acknowledged, all of one subtype.
@@ -1949,6 +1951,9 @@ static void process_artemis_response(const SessionEvent &event)
         DeviceInfo info;
         if (parse_device_info(message.json, info)) {
             s_camera_id = info.dev_id;
+            if (info.bat_percent >= 0 && info.bat_percent <= 100) {
+                s_last_battery_percent = (int)info.bat_percent;
+            }
             ESP_LOGI(TAG,
                      "Camera '%s' model '%s' fw '%s' battery %lld%% "
                      "SD free %lld MB",
@@ -2450,6 +2455,11 @@ void camera_protocol_request_stop(void)
 bool camera_protocol_work_completed(void)
 {
     return s_work_done;
+}
+
+int camera_protocol_last_battery_percent(void)
+{
+    return s_last_battery_percent.load();
 }
 
 void camera_protocol_init_storage(void)
