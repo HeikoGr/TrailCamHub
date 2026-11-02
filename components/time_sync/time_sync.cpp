@@ -14,8 +14,23 @@
 #include "esp_sntp.h"
 #include "esp_system.h"
 #include "sdkconfig.h"
+#include "time_policy.hpp"
 
 using timepolicy::Source;
+
+// The C API mirrors the policy's sources.
+static_assert(TIME_SYNC_SOURCE_NONE == static_cast<int>(Source::none), "");
+static_assert(TIME_SYNC_SOURCE_CAMERA == static_cast<int>(Source::camera), "");
+static_assert(TIME_SYNC_SOURCE_BROWSER == static_cast<int>(Source::browser),
+              "");
+static_assert(TIME_SYNC_SOURCE_BACKEND == static_cast<int>(Source::backend),
+              "");
+static_assert(TIME_SYNC_SOURCE_SNTP == static_cast<int>(Source::sntp), "");
+
+static Source to_policy(time_sync_source_t source)
+{
+    return static_cast<Source>(source);
+}
 
 static const char *TAG = "trailcamhub_time";
 
@@ -52,14 +67,20 @@ bool time_sync_clock_valid(void)
     return time(NULL) >= CLOCK_VALID_FROM;
 }
 
-Source time_sync_source(void)
+time_sync_source_t time_sync_source(void)
 {
-    return static_cast<Source>(s_source.load());
+    return static_cast<time_sync_source_t>(s_source.load());
+}
+
+const char *time_sync_source_name(time_sync_source_t source)
+{
+    return timepolicy::source_name(to_policy(source));
 }
 
 bool time_sync_trusted(void)
 {
-    return time_sync_clock_valid() && timepolicy::trusted(time_sync_source());
+    return time_sync_clock_valid() &&
+           timepolicy::trusted(to_policy(time_sync_source()));
 }
 
 // When this firmware was built; a time before that cannot be right.
@@ -75,8 +96,9 @@ static int64_t build_time(void)
     return build;
 }
 
-bool time_sync_set(int64_t unix_seconds, Source source)
+bool time_sync_set(int64_t unix_seconds, time_sync_source_t c_source)
 {
+    const Source source = to_policy(c_source);
 #if !CONFIG_TIME_SYNC_CAMERA
     if (source == Source::camera) {
         return false;
@@ -92,7 +114,7 @@ bool time_sync_set(int64_t unix_seconds, Source source)
                  (long long)unix_seconds, timepolicy::source_name(source));
         return false;
     }
-    if (!timepolicy::may_set(time_sync_source(), source,
+    if (!timepolicy::may_set(to_policy(time_sync_source()), source,
                              time_sync_clock_valid())) {
         return false;
     }
@@ -125,7 +147,7 @@ static void on_ip_event(void *arg, esp_event_base_t base, int32_t id,
     (void)base;
     (void)id;
     (void)data;
-    if (time_sync_source() == Source::sntp) {
+    if (time_sync_source() == TIME_SYNC_SOURCE_SNTP) {
         return;
     }
     esp_sntp_stop();

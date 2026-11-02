@@ -161,7 +161,7 @@ std::string describe(const HttpResult &result)
 void set_clock(std::int64_t unix_seconds)
 {
     if (unix_seconds > 0) {
-        time_sync_set(unix_seconds, timepolicy::Source::backend);
+        time_sync_set(unix_seconds, TIME_SYNC_SOURCE_BACKEND);
     }
 }
 
