@@ -42,9 +42,9 @@ esp_err_t web_ui_start(const web_ui_callbacks_t *callbacks);
 void web_ui_suspend_access_point(bool suspend);
 
 /*
- * Access point name ("Ethernet" over Ethernet), password (empty over
- * Ethernet) and page address; valid after web_ui_start. Over Ethernet the
- * address is empty until DHCP has assigned one.
+ * Access point name ("Ethernet" over Ethernet), password (over Ethernet the
+ * password of the page) and page address; valid after web_ui_start. Over
+ * Ethernet the address is empty until DHCP has assigned one.
  */
 const char *web_ui_ssid(void);
 const char *web_ui_password(void);

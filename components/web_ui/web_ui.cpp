@@ -18,6 +18,11 @@
  *   POST /api/delete     delete a file (?path=a/b)
  *   POST /api/time       set the clock from the browser (?unix=<UTC seconds>);
  *                        only if no better source has set it
+ *
+ * POST requests need the header "X-TrailCamHub: 1", which app.js sends, and
+ * an Origin (if any) that names this server; this stops other web pages from
+ * sending them through the browser (CSRF). Over Ethernet every request also
+ * needs HTTP Basic auth with the web UI password (any user name).
  */
 
 #include <dirent.h>
@@ -74,7 +79,13 @@
 #define WEB_MAX_LIST_ENTRIES 2000
 #define WEB_SD_INFO_INTERVAL_US (10 * 1000 * 1000)
 #define WEB_NVS_NAMESPACE "web_ui"
+// The access point password, or over Ethernet the password of the page.
 #define WEB_NVS_PASSWORD_KEY "ap_key"
+#if CONFIG_WEB_UI_OVER_ETHERNET
+#define WEB_CONFIGURED_PASSWORD CONFIG_WEB_UI_ETHERNET_PASSWORD
+#else
+#define WEB_CONFIGURED_PASSWORD CONFIG_WEB_UI_AP_PASSWORD
+#endif
 #define WEB_NVS_CHANNEL_KEY "ap_channel"
 // Largest free block of internal RAM needed to open the access point again.
 // When the Wi-Fi driver cannot allocate the beacon it crashes, so the access
@@ -122,6 +133,64 @@ int64_t s_sd_info_us;
 uint64_t s_sd_total;
 uint64_t s_sd_free;
 
+// Characters of generated passwords. Left out are those that look alike in
+// the display's 5x7 font or elsewhere: g, q and 9, i, l and 1, o and 0.
+const char kPasswordAlphabet[] = "abcdefhjkmnprstuvwxyz2345678";
+
+bool generated_password_valid(const char *password)
+{
+    if (strlen(password) != WEB_PASSWORD_LENGTH) {
+        return false;
+    }
+    for (const char *c = password; *c != '\0'; c++) {
+        if (strchr(kPasswordAlphabet, *c) == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Loads the password (of the access point, or of the page over Ethernet)
+// from NVS, or generates and stores one. A stored password from an older
+// alphabet is replaced, because it may not be readable on the display.
+void load_password()
+{
+    if (strlen(WEB_CONFIGURED_PASSWORD) >= 8) {
+        snprintf(s_password, sizeof(s_password), "%s", WEB_CONFIGURED_PASSWORD);
+        return;
+    }
+    nvs_handle_t nvs;
+    if (nvs_open(WEB_NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        size_t size = sizeof(s_password);
+        if (nvs_get_str(nvs, WEB_NVS_PASSWORD_KEY, s_password, &size) ==
+                ESP_OK &&
+            generated_password_valid(s_password)) {
+            nvs_close(nvs);
+            return;
+        }
+    } else {
+        nvs = 0;
+    }
+    for (int i = 0; i < WEB_PASSWORD_LENGTH; i++) {
+        s_password[i] =
+            kPasswordAlphabet[esp_random() % (sizeof(kPasswordAlphabet) - 1)];
+    }
+    s_password[WEB_PASSWORD_LENGTH] = '\0';
+#if CONFIG_WEB_UI_OVER_ETHERNET
+    ESP_LOGI(TAG, "Generated a new web UI password");
+#else
+    ESP_LOGI(TAG, "Generated a new access point password; it is shown on "
+                  "the display");
+#endif
+    if (nvs != 0) {
+        if (nvs_set_str(nvs, WEB_NVS_PASSWORD_KEY, s_password) != ESP_OK ||
+            nvs_commit(nvs) != ESP_OK) {
+            ESP_LOGW(TAG, "Could not store the access point password");
+        }
+        nvs_close(nvs);
+    }
+}
+
 #if CONFIG_WEB_UI_OVER_ETHERNET
 // The page is reachable as soon as the Ethernet interface has an address from
 // DHCP; the address is kept for web_ui_url() and logged.
@@ -142,7 +211,8 @@ void on_ethernet_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
             static_cast<const ip_event_got_ip_t *>(data);
         snprintf(url, sizeof(url), "http://" IPSTR, IP2STR(&event->ip_info.ip));
         set_url(url);
-        ESP_LOGI(TAG, "Web UI at %s", url);
+        ESP_LOGI(TAG, "Web UI at %s (password %s, any user name)", url,
+                 s_password);
     } else {
         set_url("");
         ESP_LOGI(TAG, "Web UI: Ethernet address lost");
@@ -152,6 +222,7 @@ void on_ethernet_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 esp_err_t start_network()
 {
     snprintf(s_ssid, sizeof(s_ssid), "Ethernet");
+    load_password();
     ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT,
                                                    IP_EVENT_ETH_GOT_IP,
                                                    on_ethernet_ip, NULL),
@@ -168,68 +239,15 @@ esp_err_t start_network()
         char url[sizeof(s_url)];
         snprintf(url, sizeof(url), "http://" IPSTR, IP2STR(&ip.ip));
         set_url(url);
-        ESP_LOGI(TAG, "Web UI at %s", url);
+        ESP_LOGI(TAG, "Web UI at %s (password %s, any user name)", url,
+                 s_password);
     } else {
-        ESP_LOGI(TAG, "Web UI waits for an Ethernet address");
+        ESP_LOGI(TAG, "Web UI waits for an Ethernet address (password %s)",
+                 s_password);
     }
     return ESP_OK;
 }
 #else
-// Characters of generated passwords. Left out are those that look alike in
-// the display's 5x7 font or elsewhere: g, q and 9, i, l and 1, o and 0.
-const char kPasswordAlphabet[] = "abcdefhjkmnprstuvwxyz2345678";
-
-bool generated_password_valid(const char *password)
-{
-    if (strlen(password) != WEB_PASSWORD_LENGTH) {
-        return false;
-    }
-    for (const char *c = password; *c != '\0'; c++) {
-        if (strchr(kPasswordAlphabet, *c) == NULL) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Loads the access point password from NVS, or generates and stores one. A
-// stored password from an older alphabet is replaced, because it may not be
-// readable on the display.
-void load_password()
-{
-    if (strlen(CONFIG_WEB_UI_AP_PASSWORD) >= 8) {
-        snprintf(s_password, sizeof(s_password), "%s",
-                 CONFIG_WEB_UI_AP_PASSWORD);
-        return;
-    }
-    nvs_handle_t nvs;
-    if (nvs_open(WEB_NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
-        size_t size = sizeof(s_password);
-        if (nvs_get_str(nvs, WEB_NVS_PASSWORD_KEY, s_password, &size) ==
-                ESP_OK &&
-            generated_password_valid(s_password)) {
-            nvs_close(nvs);
-            return;
-        }
-    } else {
-        nvs = 0;
-    }
-    for (int i = 0; i < WEB_PASSWORD_LENGTH; i++) {
-        s_password[i] =
-            kPasswordAlphabet[esp_random() % (sizeof(kPasswordAlphabet) - 1)];
-    }
-    s_password[WEB_PASSWORD_LENGTH] = '\0';
-    ESP_LOGI(TAG, "Generated a new access point password; it is shown on "
-                  "the display");
-    if (nvs != 0) {
-        if (nvs_set_str(nvs, WEB_NVS_PASSWORD_KEY, s_password) != ESP_OK ||
-            nvs_commit(nvs) != ESP_OK) {
-            ESP_LOGW(TAG, "Could not store the access point password");
-        }
-        nvs_close(nvs);
-    }
-}
-
 // The access point has to use the channel of the joined camera. Starting it
 // on the channel of the last camera spares the clients the switch.
 uint8_t load_channel()
@@ -1132,6 +1150,58 @@ esp_err_t handle_log(httpd_req_t *req)
     return error;
 }
 
+// Reads a request header; empty if it is absent or too long.
+std::string request_header(httpd_req_t *req, const char *name)
+{
+    const size_t length = httpd_req_get_hdr_value_len(req, name);
+    if (length == 0 || length > 256) {
+        return std::string();
+    }
+    std::string value(length + 1, '\0');
+    if (httpd_req_get_hdr_value_str(req, name, &value[0], value.size()) !=
+        ESP_OK) {
+        return std::string();
+    }
+    value.resize(length);
+    return value;
+}
+
+struct Route {
+    const char *uri;
+    httpd_method_t method;
+    esp_err_t (*handler)(httpd_req_t *req);
+    void *user_ctx;
+};
+
+// Checks every request before its handler: the password over Ethernet, and
+// for POST the page's own header and origin (see the top of this file).
+esp_err_t handle_guarded(httpd_req_t *req)
+{
+    const Route *route = static_cast<const Route *>(req->user_ctx);
+#if CONFIG_WEB_UI_OVER_ETHERNET
+    if (!web::basic_auth_matches(request_header(req, "Authorization"),
+                                 s_password)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_hdr(req, "WWW-Authenticate",
+                           "Basic realm=\"TrailCamHub\", charset=\"UTF-8\"");
+        return httpd_resp_sendstr(req, "Password required");
+    }
+#endif
+    if (route->method == HTTP_POST) {
+        const std::string origin = request_header(req, "Origin");
+        if (request_header(req, web::kRequestHeader) != "1" ||
+            (!origin.empty() &&
+             !web::same_origin(origin, request_header(req, "Host")))) {
+            ESP_LOGW(TAG, "Refused %s from another page (Origin '%s')",
+                     route->uri, origin.c_str());
+            httpd_resp_set_status(req, "403 Forbidden");
+            return httpd_resp_sendstr(req, "Request not from this page");
+        }
+    }
+    req->user_ctx = route->user_ctx;
+    return route->handler(req);
+}
+
 esp_err_t start_server()
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -1142,7 +1212,7 @@ esp_err_t start_server()
     config.max_uri_handlers = 14;
     ESP_RETURN_ON_ERROR(httpd_start(&s_server, &config), TAG, "HTTP server");
 
-    static const httpd_uri_t kHandlers[] = {
+    static const Route kRoutes[] = {
         {"/", HTTP_GET, handle_asset, const_cast<Asset *>(&kIndexHtml)},
         // The page itself, for the address of a directory or file on the card.
         {"/browse", HTTP_GET, handle_asset, const_cast<Asset *>(&kIndexHtml)},
@@ -1158,7 +1228,12 @@ esp_err_t start_server()
         {"/files/*", HTTP_GET, handle_file, NULL},
         {"/api/delete", HTTP_POST, handle_delete, NULL},
     };
-    for (const httpd_uri_t &handler : kHandlers) {
+    for (const Route &route : kRoutes) {
+        httpd_uri_t handler = {};
+        handler.uri = route.uri;
+        handler.method = route.method;
+        handler.handler = handle_guarded;
+        handler.user_ctx = const_cast<Route *>(&route);
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_server, &handler), TAG,
                             "URI handler %s", handler.uri);
     }
