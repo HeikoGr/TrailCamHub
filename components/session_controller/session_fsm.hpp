@@ -70,6 +70,22 @@ enum class Outcome : std::uint8_t {
     stopped,             // ended early by a stop request
 };
 
+// What the front ends (console, web UI, display) show. The camera and uplink
+// states are folded together, and idle tells a successful cycle apart.
+enum class FrontEndPhase : std::uint8_t {
+    idle,
+    searching,   // waking the camera over BLE
+    connecting,  // joining the camera Wi-Fi
+    connected,   // camera session
+    retry_wait,  // waiting for the next camera attempt
+    uploading,   // home Wi-Fi and backend sync
+    finished,    // idle after a successful cycle
+};
+
+// Front-end phase for the FSM `state`; `last_outcome` is the outcome of the
+// last finished cycle (none while a cycle runs or before the first one).
+FrontEndPhase front_end_phase(State state, Outcome last_outcome);
+
 struct Config {
     std::uint32_t ble_activation_timeout_ms;
     std::uint32_t wifi_join_timeout_ms;
@@ -131,5 +147,7 @@ class Fsm
 const char *to_string(State state);
 const char *to_string(Event event);
 const char *to_string(Outcome outcome);
+// Stable names used by the console ("phase ...") and the web UI JSON.
+const char *to_string(FrontEndPhase phase);
 
 }  // namespace session

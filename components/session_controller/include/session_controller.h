@@ -42,6 +42,22 @@ typedef enum {
     SESSION_RESULT_STOPPED,
 } session_result_t;
 
+/*
+ * What the front ends show: the console ("phase ..."), the web UI and the
+ * dongle display. Derived from the phase and, when idle, the last result.
+ */
+typedef enum {
+    SESSION_FRONT_END_IDLE,
+    SESSION_FRONT_END_SEARCHING,
+    SESSION_FRONT_END_CONNECTING,
+    SESSION_FRONT_END_CONNECTED,
+    SESSION_FRONT_END_RETRY_WAIT,
+    /* Joining the home Wi-Fi or syncing with the backend. */
+    SESSION_FRONT_END_UPLOADING,
+    /* Idle after a cycle with the result CAMERA_SCANNED or UPLINK_DONE. */
+    SESSION_FRONT_END_FINISHED,
+} session_front_end_phase_t;
+
 typedef struct {
     session_phase_t phase;
     /* Stable name of the phase as used on the console, e.g. "IDLE". */
@@ -72,6 +88,13 @@ typedef struct {
     session_result_t last_result;
     /* Stable name of last_result, e.g. "uplink-done" or "none". */
     const char *last_result_name;
+    session_front_end_phase_t front_end_phase;
+    /*
+     * Stable name of front_end_phase for the console and the web UI JSON:
+     * "idle", "searching", "connecting", "connected", "retry_wait",
+     * "uploading" or "finished".
+     */
+    const char *front_end_phase_name;
 } session_status_t;
 
 /*

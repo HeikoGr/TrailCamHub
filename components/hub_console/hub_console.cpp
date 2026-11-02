@@ -98,29 +98,6 @@ void event(const std::string &message)
     reply("EVENT", message);
 }
 
-const char *legacy_phase_name(const session_status_t *status)
-{
-    switch (status->phase) {
-    case SESSION_PHASE_IDLE:
-        return status->last_result == SESSION_RESULT_CAMERA_SCANNED ||
-                       status->last_result == SESSION_RESULT_UPLINK_DONE
-                   ? "finished"
-                   : "idle";
-    case SESSION_PHASE_CAMERA_WAKE:
-        return "searching";
-    case SESSION_PHASE_CAMERA_WIFI_JOIN:
-        return "connecting";
-    case SESSION_PHASE_CAMERA_SESSION:
-        return "connected";
-    case SESSION_PHASE_CAMERA_RETRY_WAIT:
-        return "retry_wait";
-    case SESSION_PHASE_UPLINK_WIFI_JOIN:
-    case SESSION_PHASE_UPLINK:
-        return "uploading";
-    }
-    return "idle";
-}
-
 // Last phase printed; only touched by the session controller task.
 session_phase_t s_printed_phase = SESSION_PHASE_IDLE;
 bool s_printed_stopping = false;
@@ -131,7 +108,7 @@ void on_status(const session_status_t *status, void *context)
 {
     (void)context;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    const char *phase = legacy_phase_name(status);
+    const char *phase = status->front_end_phase_name;
     if (strcmp(phase, "searching") == 0 && strcmp(s_phase, "searching") != 0) {
         s_media_done = 0;
         s_media_stored = 0;

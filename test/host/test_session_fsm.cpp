@@ -308,3 +308,41 @@ TEST_CASE("a new scan after a stop starts fresh")
     CHECK_FALSE(fsm.stop_pending());
     CHECK(fsm.handle(Event::session_ended).outcome == Outcome::camera_scanned);
 }
+
+TEST_CASE("front-end phase follows the state and the last outcome")
+{
+    CHECK(front_end_phase(State::idle, Outcome::none) == FrontEndPhase::idle);
+    CHECK(front_end_phase(State::idle, Outcome::camera_scanned) ==
+          FrontEndPhase::finished);
+    CHECK(front_end_phase(State::idle, Outcome::uplink_done) ==
+          FrontEndPhase::finished);
+    CHECK(front_end_phase(State::idle, Outcome::camera_unreachable) ==
+          FrontEndPhase::idle);
+    CHECK(front_end_phase(State::idle, Outcome::uplink_unreachable) ==
+          FrontEndPhase::idle);
+    CHECK(front_end_phase(State::idle, Outcome::stopped) ==
+          FrontEndPhase::idle);
+    CHECK(front_end_phase(State::ble_activation, Outcome::none) ==
+          FrontEndPhase::searching);
+    CHECK(front_end_phase(State::wifi_join, Outcome::none) ==
+          FrontEndPhase::connecting);
+    CHECK(front_end_phase(State::session, Outcome::none) ==
+          FrontEndPhase::connected);
+    CHECK(front_end_phase(State::backoff, Outcome::none) ==
+          FrontEndPhase::retry_wait);
+    CHECK(front_end_phase(State::uplink_join, Outcome::none) ==
+          FrontEndPhase::uploading);
+    CHECK(front_end_phase(State::uplink, Outcome::none) ==
+          FrontEndPhase::uploading);
+}
+
+TEST_CASE("front-end phase names stay stable for the console and web UI")
+{
+    CHECK(std::string(to_string(FrontEndPhase::idle)) == "idle");
+    CHECK(std::string(to_string(FrontEndPhase::searching)) == "searching");
+    CHECK(std::string(to_string(FrontEndPhase::connecting)) == "connecting");
+    CHECK(std::string(to_string(FrontEndPhase::connected)) == "connected");
+    CHECK(std::string(to_string(FrontEndPhase::retry_wait)) == "retry_wait");
+    CHECK(std::string(to_string(FrontEndPhase::uploading)) == "uploading");
+    CHECK(std::string(to_string(FrontEndPhase::finished)) == "finished");
+}

@@ -94,6 +94,9 @@ bool s_sync_ok;
 // Published status; written by the controller task, read by any task.
 SemaphoreHandle_t s_status_lock;
 session_status_t s_status;
+// Outcome of the last finished cycle, for the front-end phase when idle.
+// Guarded by s_status_lock like s_status.
+session::Outcome s_last_outcome = session::Outcome::none;
 
 struct Listener {
     session_status_listener_t callback;
@@ -180,6 +183,37 @@ session_result_t result_of(session::Outcome outcome)
     return SESSION_RESULT_NONE;
 }
 
+session_front_end_phase_t front_end_of(session::FrontEndPhase phase)
+{
+    switch (phase) {
+    case session::FrontEndPhase::idle:
+        return SESSION_FRONT_END_IDLE;
+    case session::FrontEndPhase::searching:
+        return SESSION_FRONT_END_SEARCHING;
+    case session::FrontEndPhase::connecting:
+        return SESSION_FRONT_END_CONNECTING;
+    case session::FrontEndPhase::connected:
+        return SESSION_FRONT_END_CONNECTED;
+    case session::FrontEndPhase::retry_wait:
+        return SESSION_FRONT_END_RETRY_WAIT;
+    case session::FrontEndPhase::uploading:
+        return SESSION_FRONT_END_UPLOADING;
+    case session::FrontEndPhase::finished:
+        return SESSION_FRONT_END_FINISHED;
+    }
+    return SESSION_FRONT_END_IDLE;
+}
+
+// Sets the front-end phase of `status` for `state`.
+void set_front_end_phase(session_status_t &status, session::State state,
+                         session::Outcome last_outcome)
+{
+    const session::FrontEndPhase phase =
+        session::front_end_phase(state, last_outcome);
+    status.front_end_phase = front_end_of(phase);
+    status.front_end_phase_name = session::to_string(phase);
+}
+
 // Updates the published status after a handled event and tells the
 // listeners. Runs in the controller task only.
 void publish_status(const session::Result &result)
@@ -196,6 +230,7 @@ void publish_status(const session::Result &result)
         result.next == session::State::backoff ? result.timer_ms : 0;
     s_status.cycle_finished = result.outcome != session::Outcome::none;
     if (cycle_started) {
+        s_last_outcome = session::Outcome::none;
         s_status.last_result = SESSION_RESULT_NONE;
         s_status.last_result_name = session::to_string(session::Outcome::none);
         s_status.camera_ssid[0] = '\0';
@@ -203,9 +238,11 @@ void publish_status(const session::Result &result)
     s_status.camera_ok = s_camera_ok;
     s_status.sync_ok = s_sync_ok;
     if (s_status.cycle_finished) {
+        s_last_outcome = result.outcome;
         s_status.last_result = result_of(result.outcome);
         s_status.last_result_name = session::to_string(result.outcome);
     }
+    set_front_end_phase(s_status, result.next, s_last_outcome);
     // The SSID belongs to the camera part of the cycle. It stays set after the
     // cycle ends, so a front end can show it with the result until the next
     // cycle starts (cleared above).
@@ -480,6 +517,7 @@ esp_err_t session_controller_init(void)
     s_status.max_attempts = kConfig.max_attempts;
     s_status.last_result = SESSION_RESULT_NONE;
     s_status.last_result_name = session::to_string(session::Outcome::none);
+    set_front_end_phase(s_status, session::State::idle, session::Outcome::none);
 
     s_events = xQueueCreate(EVENT_QUEUE_LENGTH, sizeof(QueuedEvent));
     s_session_requests = xQueueCreate(1, sizeof(esp_ip4_addr_t));
@@ -600,6 +638,7 @@ void session_controller_get_status(session_status_t *out)
         *out = {};
         out->phase_name = session::to_string(session::State::idle);
         out->last_result_name = session::to_string(session::Outcome::none);
+        set_front_end_phase(*out, session::State::idle, session::Outcome::none);
         return;
     }
     xSemaphoreTake(s_status_lock, portMAX_DELAY);

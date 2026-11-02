@@ -51,36 +51,26 @@ static void on_session_status(const session_status_t *status, void *context)
 {
     (void)context;
     dongle_ui_phase_t phase = DONGLE_UI_IDLE;
-    const char *name = "idle";
-    switch (status->phase) {
-    case SESSION_PHASE_IDLE:
-        if (status->last_result == SESSION_RESULT_CAMERA_SCANNED ||
-            status->last_result == SESSION_RESULT_UPLINK_DONE) {
-            phase = DONGLE_UI_FINISHED;
-            name = "finished";
-        }
+    switch (status->front_end_phase) {
+    case SESSION_FRONT_END_IDLE:
+        phase = DONGLE_UI_IDLE;
         break;
-    case SESSION_PHASE_CAMERA_WAKE:
+    case SESSION_FRONT_END_SEARCHING:
         phase = DONGLE_UI_SEARCHING;
-        name = "searching";
         break;
-    case SESSION_PHASE_CAMERA_WIFI_JOIN:
+    case SESSION_FRONT_END_CONNECTING:
         phase = DONGLE_UI_CONNECTING;
-        name = "connecting";
         break;
-    case SESSION_PHASE_CAMERA_SESSION:
-        phase = DONGLE_UI_CONNECTED;
-        name = "connected";
-        break;
+    case SESSION_FRONT_END_CONNECTED:
     // The display has no screen of its own for the backend sync yet.
-    case SESSION_PHASE_UPLINK_WIFI_JOIN:
-    case SESSION_PHASE_UPLINK:
+    case SESSION_FRONT_END_UPLOADING:
         phase = DONGLE_UI_CONNECTED;
-        name = "uploading";
         break;
-    case SESSION_PHASE_CAMERA_RETRY_WAIT:
+    case SESSION_FRONT_END_RETRY_WAIT:
         phase = DONGLE_UI_RETRY_WAIT;
-        name = "retry_wait";
+        break;
+    case SESSION_FRONT_END_FINISHED:
+        phase = DONGLE_UI_FINISHED;
         break;
     }
 #if CONFIG_BOARD_TDONGLE
@@ -93,10 +83,9 @@ static void on_session_status(const session_status_t *status, void *context)
 #endif
 #if CONFIG_WEB_UI_ENABLE
     if (s_web_ready) {
-        web_ui_set_status(name, status->camera_ssid, status->retry_delay_ms);
+        web_ui_set_status(status->front_end_phase_name, status->camera_ssid,
+                          status->retry_delay_ms);
     }
-#else
-    (void)name;
 #endif
 }
 
