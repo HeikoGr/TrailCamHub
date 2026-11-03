@@ -97,3 +97,43 @@ TEST_CASE("parse_media_list rejects a response without the array")
     CHECK_FALSE(parse_media_list(json, list));
     CHECK(list.files.empty());
 }
+
+TEST_CASE("parse_media_list reads the error of a camera without an SD card")
+{
+    // Logged on a TC100 with the card removed (#87): "result" is 0 although
+    // the list failed.
+    const std::string json =
+        "{\"getMediaListRet\":-1,\"errorMsg\":\"Memory card not exist\","
+        "\"result\":0,\"cmdId\":768}";
+    MediaList list;
+    CHECK_FALSE(parse_media_list(json, list));
+    CHECK(list.list_ret == -1);
+    CHECK(list.error_msg == "Memory card not exist");
+    CHECK(list.result == 0);
+    CHECK(media_list_failed(list));
+}
+
+TEST_CASE("media_list_failed is false for a valid list, also an empty one")
+{
+    MediaList list;
+    REQUIRE(parse_media_list(
+        "{\"mediaFiles\":[],\"cnt\":0,\"pageNo\":0,\"result\":0,\"cmdId\":768}",
+        list));
+    CHECK(list.list_ret == 0);
+    CHECK(list.error_msg.empty());
+    CHECK_FALSE(media_list_failed(list));
+
+    // The real response carries "errorMsg":"Success".
+    REQUIRE(parse_media_list(kRealResponse, list));
+    CHECK(list.error_msg == "Success");
+    CHECK_FALSE(media_list_failed(list));
+}
+
+TEST_CASE("media_list_failed flags an error even with a mediaFiles array")
+{
+    MediaList list;
+    REQUIRE(parse_media_list(
+        "{\"mediaFiles\":[],\"getMediaListRet\":2,\"result\":0,\"cmdId\":768}",
+        list));
+    CHECK(media_list_failed(list));
+}

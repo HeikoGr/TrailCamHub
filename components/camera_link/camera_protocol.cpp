@@ -140,6 +140,9 @@ static const bool kDiscardVideoData = false;
 #ifndef CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S
 #define CONFIG_CAMERA_DOWNLOAD_STALL_TIMEOUT_S 20
 #endif
+#ifndef CONFIG_CAMERA_SESSION_IDLE_TIMEOUT_S
+#define CONFIG_CAMERA_SESSION_IDLE_TIMEOUT_S 60
+#endif
 
 static const char *TAG = "trailcamhub_protocol";
 static const uint16_t s_camera_discovery_ports[] = {40611, 3333};
@@ -347,6 +350,12 @@ static std::vector<camera::artemis::CatalogEntry> s_thumb_queue;
 static size_t s_thumb_index;
 static bool s_thumb_emitted;
 static bool s_work_done;
+// The session cannot do its work (e.g. the camera has no SD card): close it
+// like a finished one, but do not count it as synced.
+static bool s_end_session;
+// Last time the camera answered a request or sent bulk data. Heartbeats do
+// not count: the camera answers them even when nothing else happens.
+static int64_t s_last_progress_us;
 // Battery of the camera of the last session; read by other tasks.
 static std::atomic<int> s_last_battery_percent{-1};
 static camera::artemis::BulkReassembler s_bulk;
@@ -1877,6 +1886,9 @@ static void process_artemis_response(const SessionEvent &event)
 
     ESP_LOGI(TAG, "ARTEMIS response cmdId %lld: %s", (long long)cmd_id,
              message.json.c_str());
+    if (cmd_id != 525) {
+        s_last_progress_us = esp_timer_get_time();
+    }
 
     // The camera answers the playback request with the video's size, then
     // streams it. When it refuses the app's fileType, try the media list's.
@@ -1928,7 +1940,18 @@ static void process_artemis_response(const SessionEvent &event)
     // the model is exercised against the real response on hardware too.
     if (cmd_id == 768) {
         camera::artemis::MediaList list;
-        if (camera::artemis::parse_media_list(message.json, list)) {
+        const bool parsed =
+            camera::artemis::parse_media_list(message.json, list);
+        if (!parsed || camera::artemis::media_list_failed(list)) {
+            // Nothing to fetch: no thumbnail or download would be queued, so
+            // the session would idle on heartbeats. Leave the catalog as is.
+            ESP_LOGE(TAG,
+                     "Media list failed (getMediaListRet %lld, errorMsg "
+                     "'%s'%s); ending the camera session",
+                     (long long)list.list_ret, list.error_msg.c_str(),
+                     parsed ? "" : ", no mediaFiles array");
+            s_end_session = true;
+        } else {
             int photos = 0;
             int videos = 0;
             for (const auto &item : list.files) {
@@ -1955,8 +1978,6 @@ static void process_artemis_response(const SessionEvent &event)
                      s_camera_id.c_str(), (unsigned)s_catalog.size(),
                      (unsigned)added, (unsigned)s_thumb_queue.size());
             request_current_thumbnail();
-        } else {
-            ESP_LOGW(TAG, "Media-list response had no mediaFiles array");
         }
     }
 
@@ -2032,6 +2053,8 @@ static esp_err_t run_artemis_session(int socket_fd,
     s_thumb_index = 0;
     s_thumb_emitted = false;
     s_work_done = false;
+    s_end_session = false;
+    s_last_progress_us = esp_timer_get_time();
     s_bulk.reset();
     s_bulk_subtype = 0;
     s_bulk_ack_pending = 0;
@@ -2051,13 +2074,27 @@ static esp_err_t run_artemis_session(int socket_fd,
     while (!stop_requested()) {
         // All requested work is done: close the camera session cleanly
         // (PPPP/CS2 CLOSE) and finish, rather than idling on heartbeats.
-        if (s_work_done) {
+        if (s_work_done || s_end_session) {
             const camera::ControlRequest close(camera::PacketType::close);
             send_udp_request(socket_fd, camera_address, "CLOSE", close);
-            ESP_LOGI(TAG, "Work complete; closed the camera session");
+            ESP_LOGI(TAG, "%s; closed the camera session",
+                     s_work_done ? "Work complete" : "Nothing more to do");
             return ESP_OK;
         }
         int64_t now_us = esp_timer_get_time();
+        // A request the camera never answers (or an answer we do not
+        // handle) would keep the session, and the camera's Wi-Fi, alive on
+        // heartbeats until its battery is empty.
+        if (now_us - s_last_progress_us >
+            CONFIG_CAMERA_SESSION_IDLE_TIMEOUT_S * 1000000LL) {
+            ESP_LOGE(TAG,
+                     "No answer or data from the camera for %d s; closing "
+                     "the camera session",
+                     CONFIG_CAMERA_SESSION_IDLE_TIMEOUT_S);
+            const camera::ControlRequest close(camera::PacketType::close);
+            send_udp_request(socket_fd, camera_address, "CLOSE", close);
+            return ESP_ERR_TIMEOUT;
+        }
         check_download_stall(now_us);
         check_thumbnail_stall(now_us);
         // A video download may use its own interval: the camera streamed about
@@ -2172,6 +2209,7 @@ static esp_err_t run_artemis_session(int socket_fd,
         // skip handle_packet() for them.
         if (received >= 8 && packet[0] == 0xf1 && packet[1] == 0xd0 &&
             packet[4] == 0xd1 && packet[5] != 0x00) {
+            s_last_progress_us = last_receive_us;
             handle_bulk_frame(socket_fd, camera_address, packet,
                               static_cast<size_t>(received));
             continue;

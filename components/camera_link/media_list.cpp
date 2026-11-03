@@ -16,6 +16,9 @@ bool parse_media_list(const std::string &json, MediaList &out)
         out.page_no = value;
     if (json_find_int(json, "result", value))
         out.result = value;
+    if (json_find_int(json, "getMediaListRet", value))
+        out.list_ret = value;
+    json_find_string(json, "errorMsg", out.error_msg);
 
     const std::size_t key = json.find("\"mediaFiles\"");
     if (key == std::string::npos)
@@ -52,6 +55,11 @@ bool parse_media_list(const std::string &json, MediaList &out)
     }
 
     return true;
+}
+
+bool media_list_failed(const MediaList &list)
+{
+    return list.list_ret != 0;
 }
 
 }  // namespace camera::artemis

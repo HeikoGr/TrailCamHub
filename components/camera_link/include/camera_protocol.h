@@ -9,7 +9,10 @@
 /*
  * Runs one camera session (discovery, PRE_LOGIN, ARTEMIS heartbeats) with the
  * camera at `gateway`. Blocks until the camera closes the session
- * (ESP_ERR_INVALID_STATE), an error occurs, or a stop is requested (ESP_OK).
+ * (ESP_ERR_INVALID_STATE), an error occurs, the work is done or cannot be
+ * done (no SD card in the camera) or a stop is requested (ESP_OK), or the
+ * camera made no progress for CAMERA_SESSION_IDLE_TIMEOUT_S
+ * (ESP_ERR_TIMEOUT).
  */
 esp_err_t camera_protocol_run(const esp_ip4_addr_t *gateway);
 
