@@ -32,6 +32,7 @@ set(mp4_dir ${repo_root}/components/mp4_mux)
 set(time_dir ${repo_root}/components/time_sync)
 set(wifi_dir ${repo_root}/components/camera_wifi)
 set(schedule_dir ${repo_root}/components/schedule)
+set(sd_log_dir ${repo_root}/components/sd_log)
 
 add_executable(host_tests
     test_main.cpp
@@ -59,6 +60,7 @@ add_executable(host_tests
     test_playback_decoder.cpp
     test_prelogin.cpp
     test_schedule_plan.cpp
+    test_sd_log_files.cpp
     test_session_fsm.cpp
     test_status_screen.cpp
     test_screen_renderer.cpp
@@ -103,13 +105,15 @@ add_executable(host_tests
     ${mp4_dir}/mp4_mux.cpp
     ${time_dir}/time_policy.cpp
     ${wifi_dir}/disconnect_policy.cpp
-    ${schedule_dir}/schedule_plan.cpp)
+    ${schedule_dir}/schedule_plan.cpp
+    ${sd_log_dir}/log_files.cpp)
 target_include_directories(host_tests PRIVATE ${ble_dir} ${link_dir} ${mp4_dir} ${time_dir}
                                               ${session_dir} ${ui_dir}
                                               ${web_dir}
                                               ${config_dir}/include
                                               ${console_dir} ${uplink_dir}
-                                              ${wifi_dir} ${schedule_dir})
+                                              ${wifi_dir} ${schedule_dir}
+                                              ${sd_log_dir})
 target_include_directories(host_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_options(host_tests PRIVATE -Wall -Wextra -Werror)
 

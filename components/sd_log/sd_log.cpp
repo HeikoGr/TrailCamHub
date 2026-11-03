@@ -13,6 +13,8 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <string>
+#include <vector>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -23,12 +25,11 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
+#include "log_files.hpp"
 #include "sd_card.h"
 #include "sd_log.h"
 
 #define SD_LOG_DIR SD_CARD_MOUNT_POINT "/logs"
-#define SD_LOG_PREFIX "log-"
-#define SD_LOG_SUFFIX ".txt"
 // Longer lines are cut; ESP-IDF log lines are well below this.
 #define SD_LOG_LINE_MAX 256
 #define SD_LOG_WRITE_CHUNK 4096
@@ -64,12 +65,9 @@ int log_vprintf(const char *format, va_list args)
     const int result = s_console(format, args);
     if (s_enabled.load(std::memory_order_relaxed)) {
         char line[SD_LOG_LINE_MAX];
-        int length = vsnprintf(line, sizeof(line), format, copy);
+        const size_t length = sdlog::fit_line(
+            line, vsnprintf(line, sizeof(line), format, copy), sizeof(line));
         if (length > 0) {
-            if (length >= (int)sizeof(line)) {
-                length = sizeof(line) - 1;
-                line[length - 1] = '\n';
-            }
             if (xRingbufferSend(s_ring, line, length, 0) != pdTRUE) {
                 s_dropped.fetch_add(1, std::memory_order_relaxed);
             }
@@ -79,61 +77,37 @@ int log_vprintf(const char *format, va_list args)
     return result;
 }
 
-// Number of a log file name, or 0 if the name is not one of ours.
-unsigned file_number(const char *name)
-{
-    const size_t prefix = strlen(SD_LOG_PREFIX);
-    if (strncmp(name, SD_LOG_PREFIX, prefix) != 0) {
-        return 0;
-    }
-    char *end = NULL;
-    const unsigned long number = strtoul(name + prefix, &end, 10);
-    if (end == name + prefix || strcmp(end, SD_LOG_SUFFIX) != 0) {
-        return 0;
-    }
-    return (unsigned)number;
-}
-
 void make_path(char *path, size_t size, unsigned number)
 {
-    snprintf(path, size, SD_LOG_DIR "/" SD_LOG_PREFIX "%05u" SD_LOG_SUFFIX,
-             number);
+    snprintf(path, size, SD_LOG_DIR "/%s", sdlog::file_name(number).c_str());
 }
 
 // Removes the oldest files so that at most `keep` remain; returns the
 // highest file number found.
 unsigned prune_files(unsigned keep)
 {
+    std::vector<unsigned> numbers;
     unsigned highest = 0;
-    unsigned count = 0;
-    unsigned lowest = 0;
     DIR *dir = opendir(SD_LOG_DIR);
     if (dir == NULL) {
         return 0;
     }
     while (struct dirent *entry = readdir(dir)) {
-        const unsigned number = file_number(entry->d_name);
+        const unsigned number = sdlog::file_number(entry->d_name);
         if (number == 0) {
             continue;
         }
-        count++;
+        numbers.push_back(number);
         if (number > highest) {
             highest = number;
         }
-        if (lowest == 0 || number < lowest) {
-            lowest = number;
-        }
     }
     closedir(dir);
-    // Numbers are consecutive apart from gaps left by earlier pruning, so
-    // remove from the lowest upwards.
+    // A file that cannot be removed is kept; no newer one is removed for it.
     char path[SD_LOG_MAX_PATH];
-    for (unsigned number = lowest; count > keep && number <= highest;
-         number++) {
+    for (unsigned number : sdlog::files_to_remove(std::move(numbers), keep)) {
         make_path(path, sizeof(path), number);
-        if (remove(path) == 0) {
-            count--;
-        }
+        remove(path);
     }
     return highest;
 }
