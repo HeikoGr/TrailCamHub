@@ -6,6 +6,10 @@
 // uploaded. It is kept in memory, merged with each fresh media list, and
 // persisted as a small CSV file on the SD card. Pure logic, host-testable; the
 // SD read/write lives in a separate runtime layer.
+//
+// An item is identified by its mediaId, not by dir/num: the camera reuses
+// dir/num after its card was cleared, but never a mediaId (see
+// docs/media-identity.md).
 
 #include <cstddef>
 #include <cstdint>
@@ -24,6 +28,10 @@ struct CatalogEntry {
     std::int64_t file_type = 0;  // 0 = photo, 2 = video (per the media list)
     std::int64_t media_time = 0;
     std::uint32_t flags = 0;
+    // In the media list of the current camera session (set by merge(), not
+    // persisted). Only these entries are on the camera's card right now, so
+    // only these may be requested from the camera by dir/num.
+    bool listed = false;
 };
 
 class MediaCatalog
@@ -38,17 +46,32 @@ class MediaCatalog
     };
 
     // Adds entries from a freshly fetched list. Existing entries (matched by
-    // dir+num) keep their flags; their id/time/type are refreshed. Returns the
-    // number of newly added entries.
+    // mediaId) keep their flags; their dir/num/time/type are refreshed. A
+    // known dir/num with a new mediaId is a new recording (the card was
+    // cleared): it gets its own entry with no flags, and the old entry keeps
+    // its flags. Items without a valid mediaId (missing or <= 0) are skipped.
+    // Marks exactly the listed entries as `listed`. Returns the number of
+    // newly added entries.
     std::size_t merge(const MediaList &list);
 
-    CatalogEntry *find(std::int64_t dir, std::int64_t num);
-    const CatalogEntry *find(std::int64_t dir, std::int64_t num) const;
+    CatalogEntry *find(std::int64_t media_id);
+    const CatalogEntry *find(std::int64_t media_id) const;
+    // The listed entry with this dir/num (unique on the card at one time), or
+    // nullptr. For answers of the camera, which name dir/num.
+    const CatalogEntry *find_listed(std::int64_t dir, std::int64_t num) const;
+    // The entry with this dir/num: the listed one if any, otherwise the one
+    // added last. Only for interfaces that do not carry the mediaId yet (the
+    // backend API, see #85).
+    const CatalogEntry *find_by_dir_num(std::int64_t dir,
+                                        std::int64_t num) const;
 
-    bool set_flag(std::int64_t dir, std::int64_t num, Flag flag);
-    bool clear_flag(std::int64_t dir, std::int64_t num, Flag flag);
-    bool has_flag(std::int64_t dir, std::int64_t num, Flag flag) const;
+    bool set_flag(std::int64_t media_id, Flag flag);
+    bool clear_flag(std::int64_t media_id, Flag flag);
+    bool has_flag(std::int64_t media_id, Flag flag) const;
 
+    // Work for the camera session, from the listed entries only: an entry
+    // that is not on the card cannot be fetched, and its dir/num may belong
+    // to another recording now.
     // Items whose thumbnail is not stored yet.
     std::vector<CatalogEntry> missing_thumbnails() const;
     // Video items the user requested that are not downloaded yet.
@@ -71,8 +94,10 @@ class MediaCatalog
     }
     std::size_t count_with_flag(Flag flag) const;
 
-    // CSV with a version header line. parse() replaces the contents and
-    // returns false if the header/version is not recognised.
+    // CSV with a version header line (v2). parse() replaces the contents and
+    // returns false if the header/version is not recognised. It also reads
+    // v1, which had the same columns but was keyed by dir/num; rows without
+    // a valid mediaId and repeated mediaIds are dropped.
     std::string serialize() const;
     bool parse(const std::string &text);
     void clear()

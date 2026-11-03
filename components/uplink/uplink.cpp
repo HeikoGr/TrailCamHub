@@ -169,7 +169,7 @@ void set_clock(std::int64_t unix_seconds)
 struct CameraState {
     std::string id;
     camera::artemis::MediaCatalog catalog;
-    std::vector<MediaRef> sent;  // media in this check-in
+    std::vector<std::int64_t> sent;  // mediaIds of the media in this check-in
     bool catalog_changed = false;
 };
 
@@ -219,7 +219,7 @@ void collect_cameras(CheckinRequest &request, std::vector<CameraState> &cameras)
             const MediaRef ref = {e.dir_num, e.media_num, e.file_type,
                                   e.media_time};
             report.media.push_back(ref);
-            state.sent.push_back(ref);
+            state.sent.push_back(e.media_id);
         }
         media_budget -= report.media.size();
         request.cameras.push_back(report);
@@ -266,9 +266,9 @@ void apply_checkin_result(CameraState &camera, const CameraCheckin &result)
         }
         return;
     }
-    for (const MediaRef &m : camera.sent) {
+    for (const std::int64_t media_id : camera.sent) {
         camera.catalog_changed |=
-            camera.catalog.set_flag(m.dir, m.num, MediaCatalog::kReported);
+            camera.catalog.set_flag(media_id, MediaCatalog::kReported);
     }
 }
 
@@ -374,9 +374,15 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
                 continue;
             }
             if (command.type == "requestVideo") {
-                if (camera != nullptr) {
+                // The command still names dir/num (#85); take the recording
+                // the camera holds under it now.
+                const camera::artemis::CatalogEntry *entry =
+                    camera != nullptr ? camera->catalog.find_by_dir_num(
+                                            command.dir, command.num)
+                                      : nullptr;
+                if (entry != nullptr) {
                     camera->catalog_changed |= camera->catalog.set_flag(
-                        command.dir, command.num,
+                        entry->media_id,
                         camera::artemis::MediaCatalog::kVideoRequested);
                 }
                 command_result.error = "video download is not supported by "

@@ -1131,7 +1131,7 @@ static void complete_pending_video(bool wait)
                  (unsigned long long)(elapsed_ms > 0
                                           ? s_pending_video.bytes / elapsed_ms
                                           : 0));
-        s_catalog.set_flag(e.dir_num, e.media_num,
+        s_catalog.set_flag(e.media_id,
                            camera::artemis::MediaCatalog::kFileDownloaded);
         camera::store::save_catalog(s_camera_id, s_catalog);
         ++s_download_stored;
@@ -1231,8 +1231,7 @@ static void finish_current_download(bool stored, bool stop_all)
                  file.path().c_str(), (unsigned long long)bytes,
                  (long long)elapsed_ms,
                  (unsigned long long)(elapsed_ms > 0 ? bytes / elapsed_ms : 0));
-        s_catalog.set_flag(e.dir_num, e.media_num,
-                           MediaCatalog::kFileDownloaded);
+        s_catalog.set_flag(e.media_id, MediaCatalog::kFileDownloaded);
         camera::store::save_catalog(s_camera_id, s_catalog);
         ++s_download_stored;
     } else {
@@ -1777,19 +1776,36 @@ static void handle_bulk_frame(int socket_fd,
             // Thumbnail: store it on the SD card and record it in the catalog.
             // Date the file by the capture time from the media list.
             const uint8_t *jpeg = s_bulk.payload() + jpeg_offset;
+            // The answer names dir/num, which is unique among the items of
+            // the current media list (only those are requested).
             const CatalogEntry *entry =
-                s_catalog.find(header.dir_num, header.media_num);
-            const int64_t media_time = entry != nullptr ? entry->media_time : 0;
-            if (camera::store::write_thumbnail(s_camera_id, header.dir_num,
-                                               header.media_num, jpeg,
-                                               jpeg_size, media_time)) {
-                s_catalog.set_flag(header.dir_num, header.media_num,
-                                   MediaCatalog::kThumbPresent);
-                camera::store::save_catalog(s_camera_id, s_catalog);
-            } else {
-                ESP_LOGW(TAG, "Could not store thumbnail dir %lld num %lld",
+                s_catalog.find_listed(header.dir_num, header.media_num);
+            if (entry == nullptr) {
+                ESP_LOGW(TAG,
+                         "Thumbnail dir %lld num %lld is not in the media "
+                         "list; not stored",
                          (long long)header.dir_num,
                          (long long)header.media_num);
+            } else {
+                const int64_t media_id = entry->media_id;
+                if (header.media_id != media_id) {
+                    ESP_LOGW(TAG,
+                             "Thumbnail dir %lld num %lld: record id %lld, "
+                             "list mediaId %lld",
+                             (long long)header.dir_num,
+                             (long long)header.media_num,
+                             (long long)header.media_id, (long long)media_id);
+                }
+                if (camera::store::write_thumbnail(
+                        s_camera_id, header.dir_num, header.media_num, jpeg,
+                        jpeg_size, entry->media_time)) {
+                    s_catalog.set_flag(media_id, MediaCatalog::kThumbPresent);
+                    camera::store::save_catalog(s_camera_id, s_catalog);
+                } else {
+                    ESP_LOGW(TAG, "Could not store thumbnail dir %lld num %lld",
+                             (long long)header.dir_num,
+                             (long long)header.media_num);
+                }
             }
             // Emit the first thumbnail of the cycle over serial (for the web
             // live view); the rest just go to the SD card to avoid flooding.
