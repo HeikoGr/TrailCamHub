@@ -530,8 +530,7 @@ esp_err_t handle_status(httpd_req_t *req)
     json += clock_valid ? ",\"clock_set\":true" : ",\"clock_set\":false";
     json += ",\"clock_source\":";
     web::append_json_string(
-        json,
-        clock_valid ? timepolicy::source_name(time_sync_source()) : "none");
+        json, clock_valid ? time_sync_source_name(time_sync_source()) : "none");
     char now_text[40];
     snprintf(now_text, sizeof(now_text), ",\"time\":%lld",
              clock_valid ? (long long)time(NULL) : 0LL);
@@ -575,12 +574,12 @@ esp_err_t handle_time(httpd_req_t *req)
     if (seconds <= 0) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no time");
     }
-    const bool set = time_sync_set(seconds, timepolicy::Source::browser);
+    const bool set = time_sync_set(seconds, TIME_SYNC_SOURCE_BROWSER);
     std::string json = std::string("{\"ok\":true,\"set\":") +
                        (set ? "true" : "false") + ",\"source\":";
     web::append_json_string(json,
                             time_sync_clock_valid()
-                                ? timepolicy::source_name(time_sync_source())
+                                ? time_sync_source_name(time_sync_source())
                                 : "none");
     json += "}";
     return send_json(req, json);

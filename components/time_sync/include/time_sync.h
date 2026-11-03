@@ -4,7 +4,10 @@
 #include <stdint.h>
 
 #include "esp_err.h"
-#include "time_policy.hpp"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /*
  * The clock of the device is not set at boot, and the times that the firmware
@@ -14,6 +17,18 @@
  * the camera. A better source replaces a worse one; a worse one sets the
  * clock only while it holds no time at all.
  */
+
+/* Where the time of the clock came from, from worst to best. */
+typedef enum {
+    TIME_SYNC_SOURCE_NONE = 0, /* not set by this module */
+    TIME_SYNC_SOURCE_CAMERA = 1,
+    TIME_SYNC_SOURCE_BROWSER = 2,
+    TIME_SYNC_SOURCE_BACKEND = 3,
+    TIME_SYNC_SOURCE_SNTP = 4,
+} time_sync_source_t;
+
+/* Name of a source for logs and the web UI ("sntp", "camera", ...). */
+const char *time_sync_source_name(time_sync_source_t source);
 
 /*
  * Starts the SNTP client, which sets the clock as soon as a network reaches
@@ -28,7 +43,7 @@ bool time_sync_clock_valid(void);
 
 /* The source of the time that the clock holds (none: not set by this module).
  */
-timepolicy::Source time_sync_source(void);
+time_sync_source_t time_sync_source(void);
 
 /*
  * True if the clock holds a time that is good enough to give to the camera
@@ -41,4 +56,8 @@ bool time_sync_trusted(void);
  * is enabled in the configuration and it is not worse than the source of the
  * time that the clock holds. Returns whether the clock was set.
  */
-bool time_sync_set(int64_t unix_seconds, timepolicy::Source source);
+bool time_sync_set(int64_t unix_seconds, time_sync_source_t source);
+
+#ifdef __cplusplus
+}
+#endif

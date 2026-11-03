@@ -2005,7 +2005,7 @@ static void process_artemis_response(const SessionEvent &event)
                 camera_wall_clock > 0) {
                 time_sync_set(
                     camera::camera_wall_clock_to_utc(camera_wall_clock),
-                    timepolicy::Source::camera);
+                    TIME_SYNC_SOURCE_CAMERA);
             }
             if (!camera::store::save_camera_info(info, (int64_t)time(NULL))) {
                 ESP_LOGW(TAG, "Could not store the camera info on the SD card");
