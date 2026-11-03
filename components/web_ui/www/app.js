@@ -57,9 +57,13 @@ function deletable(path) {
 
 // --- Status -----------------------------------------------------------------
 
+// State-changing requests carry this header; the device refuses them without
+// it, so other web pages cannot send them through the browser (CSRF).
+const POST = { method: "POST", headers: { "X-TrailCamHub": "1" } };
+
 async function post(url) {
   try {
-    await fetch(url, { method: "POST" });
+    await fetch(url, POST);
   } catch (e) {
     // Shown by the next status poll.
   }
@@ -177,7 +181,7 @@ function syncClock(s) {
   const now = Date.now();
   if (now - timeSent < 30 * 60 * 1000) return;
   timeSent = now;
-  fetch("/api/time?unix=" + Math.floor(now / 1000), { method: "POST" }).catch(
+  fetch("/api/time?unix=" + Math.floor(now / 1000), POST).catch(
     () => {
       timeSent = 0;  // try again with the next status
     },
@@ -206,7 +210,7 @@ function deleteButton(path, onDeleted) {
     button.disabled = true;
     try {
       const response = await fetch(
-        "/api/delete?path=" + encodeURIComponent(path), { method: "POST" });
+        "/api/delete?path=" + encodeURIComponent(path), POST);
       if (!response.ok) throw new Error(await response.text());
       onDeleted();
     } catch (e) {

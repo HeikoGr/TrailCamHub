@@ -138,3 +138,39 @@ TEST_CASE("json_int and json_string read the fields of camera.json")
     CHECK_FALSE(web::json_string(json, "batPercent", text));  // an integer
     CHECK_FALSE(web::json_string(json, "missing", text));
 }
+
+TEST_CASE("same_origin accepts only the server's own origin")
+{
+    CHECK(web::same_origin("http://192.168.1.20", "192.168.1.20"));
+    CHECK(web::same_origin("HTTP://hub.local", "HUB.local"));
+    CHECK(web::same_origin("http://192.168.1.20:8080", "192.168.1.20:8080"));
+    CHECK_FALSE(web::same_origin("http://192.168.1.20:8080", "192.168.1.20"));
+    CHECK_FALSE(web::same_origin("http://evil.example", "192.168.1.20"));
+    CHECK_FALSE(web::same_origin("http://192.168.1.200", "192.168.1.20"));
+    CHECK_FALSE(web::same_origin("null", "192.168.1.20"));
+    CHECK_FALSE(web::same_origin("", "192.168.1.20"));
+    CHECK_FALSE(web::same_origin("http://192.168.1.20", ""));
+    CHECK_FALSE(web::same_origin("http://", ""));
+}
+
+TEST_CASE("basic_auth_matches checks the password of HTTP Basic auth")
+{
+    // "admin:secret"
+    CHECK(web::basic_auth_matches("Basic YWRtaW46c2VjcmV0", "secret"));
+    CHECK(web::basic_auth_matches("basic  YWRtaW46c2VjcmV0", "secret"));
+    // Any user name, also none: ":secret"
+    CHECK(web::basic_auth_matches("Basic OnNlY3JldA==", "secret"));
+    // "u:secre" and "u:secrets": a prefix or a longer password
+    CHECK_FALSE(web::basic_auth_matches("Basic dTpzZWNyZQ==", "secret"));
+    CHECK_FALSE(web::basic_auth_matches("Basic dTpzZWNyZXRz", "secret"));
+    // "u:a:b": the password is everything after the first colon
+    CHECK(web::basic_auth_matches("Basic dTphOmI=", "a:b"));
+    CHECK_FALSE(web::basic_auth_matches("Basic YWRtaW46c2VjcmV0", "other"));
+    CHECK_FALSE(web::basic_auth_matches("Basic YWRtaW46c2VjcmV0", ""));
+    CHECK_FALSE(web::basic_auth_matches("Bearer YWRtaW46c2VjcmV0", "secret"));
+    CHECK_FALSE(web::basic_auth_matches("Basic YWRt*W46c2VjcmV0", "secret"));
+    CHECK_FALSE(web::basic_auth_matches("Basic YWRtaW46c2VjcmV0=x", "secret"));
+    // No colon: "adminsecret"
+    CHECK_FALSE(web::basic_auth_matches("Basic YWRtaW5zZWNyZXQ=", "secret"));
+    CHECK_FALSE(web::basic_auth_matches("", "secret"));
+}

@@ -35,7 +35,98 @@ bool ends_with(const std::string &text, const char *suffix)
     return true;
 }
 
+int base64_value(char c)
+{
+    if (c >= 'A' && c <= 'Z')
+        return c - 'A';
+    if (c >= 'a' && c <= 'z')
+        return c - 'a' + 26;
+    if (c >= '0' && c <= '9')
+        return c - '0' + 52;
+    if (c == '+')
+        return 62;
+    if (c == '/')
+        return 63;
+    return -1;
+}
+
+// Decodes standard Base64 with optional '=' padding. False on any other
+// character or on data after the padding.
+bool base64_decode(const std::string &in, std::string &out)
+{
+    out.clear();
+    std::uint32_t bits = 0;
+    int count = 0;
+    std::size_t i = 0;
+    for (; i < in.size() && in[i] != '='; i++) {
+        const int value = base64_value(in[i]);
+        if (value < 0)
+            return false;
+        bits = (bits << 6) | static_cast<std::uint32_t>(value);
+        count += 6;
+        if (count >= 8) {
+            count -= 8;
+            out.push_back(static_cast<char>((bits >> count) & 0xff));
+        }
+    }
+    for (; i < in.size(); i++) {
+        if (in[i] != '=')
+            return false;
+    }
+    return true;
+}
+
+bool equal_ignoring_case(const std::string &a, const std::string &b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (std::size_t i = 0; i < a.size(); i++) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i])))
+            return false;
+    }
+    return true;
+}
+
 }  // namespace
+
+bool same_origin(const std::string &origin, const std::string &host)
+{
+    if (host.empty())
+        return false;
+    for (const char *scheme : {"http://", "https://"}) {
+        const std::size_t length = std::strlen(scheme);
+        if (origin.size() > length &&
+            equal_ignoring_case(origin.substr(0, length), scheme)) {
+            return equal_ignoring_case(origin.substr(length), host);
+        }
+    }
+    return false;
+}
+
+bool basic_auth_matches(const std::string &header, const std::string &password)
+{
+    if (password.empty() || header.size() < 6 ||
+        !equal_ignoring_case(header.substr(0, 6), "Basic "))
+        return false;
+    std::size_t begin = 6;
+    while (begin < header.size() && header[begin] == ' ')
+        begin++;
+    std::string credentials;
+    if (!base64_decode(header.substr(begin), credentials))
+        return false;
+    const std::size_t colon = credentials.find(':');
+    if (colon == std::string::npos)
+        return false;
+    const std::string given = credentials.substr(colon + 1);
+    // Constant time in the length of the stored password.
+    unsigned char difference = given.size() == password.size() ? 0 : 1;
+    for (std::size_t i = 0; i < password.size(); i++) {
+        const char c = i < given.size() ? given[i] : '\0';
+        difference |= static_cast<unsigned char>(c ^ password[i]);
+    }
+    return difference == 0;
+}
 
 bool url_decode(const std::string &in, std::string &out)
 {

@@ -53,4 +53,19 @@ bool json_string(const std::string &json, const std::string &key,
 // Appends `text` as a JSON string literal (with quotes).
 void append_json_string(std::string &out, const std::string &text);
 
+// Header that the page sends with every state-changing request. A cross-site
+// request cannot set it without a CORS preflight, which the server does not
+// answer, so its presence shows that the request comes from the page itself.
+constexpr const char *kRequestHeader = "X-TrailCamHub";
+
+// True if an "Origin" header value names the server at `host` (the value of
+// the "Host" header): "http://<host>" or "https://<host>", case-insensitive.
+// "null", other hosts and other ports are rejected.
+bool same_origin(const std::string &origin, const std::string &host);
+
+// True if an "Authorization" header value is HTTP Basic auth whose password
+// is `password` (any user name). An empty `password` never matches. The
+// password is compared in constant time.
+bool basic_auth_matches(const std::string &header, const std::string &password);
+
 }  // namespace web
