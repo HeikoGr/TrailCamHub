@@ -25,15 +25,15 @@
 #endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "mbedtls/aes.h"
 #include "lwip/sockets.h"
 
 #include "artemis_crypto.hpp"
-#include "artemis_login.hpp"
+#include "artemis_json.hpp"
 #include "camera_clock.hpp"
 #include "artemis_message.hpp"
 #include "artemis_reassembler.hpp"
-#include "camera_prelogin.hpp"
+#include "camera_handshake.hpp"
+#include "camera_link_io.hpp"
 #include "time_sync.h"
 #include "camera_protocol.h"
 #include "camera_udp_transport.h"
@@ -54,10 +54,6 @@
 #include "task_load.hpp"
 #include "sdkconfig.h"
 
-#define CAMERA_DISCOVERY_LOCAL_PORT 35281
-#define CAMERA_DISCOVERY_TIMEOUT_MS 1500
-#define CAMERA_DISCOVERY_RECEIVE_TIMEOUT_MS 500
-#define CAMERA_PRELOGIN_RECEIVE_TIMEOUT_MS 1000
 #define CAMERA_RUDP_RECEIVE_TIMEOUT_MS 500
 #define CAMERA_RUDP_HEARTBEAT_INTERVAL_MS 1500
 // Frames buffered ahead of a missing one while streaming a download (1 KB
@@ -145,192 +141,14 @@ static const bool kDiscardVideoData = false;
 #endif
 
 static const char *TAG = "trailcamhub_protocol";
-static const uint16_t s_camera_discovery_ports[] = {40611, 3333};
-// clang-format off
-static const uint8_t s_prelogin_static_header[] = {
-    0x0c, 0xcb, 0x9a, 0x2b, 0x5f, 0x95, 0x1e, 0xb6,
-    0x69, 0xdf, 0xaa, 0x37, 0x5a, 0x6b, 0xbe, 0x3e,
-    0x76, 0x20, 0x2e, 0x13, 0xc9, 0xd1, 0xaa, 0x36,
-    0x31, 0xbe, 0x74, 0xe5,
-};
-// clang-format on
-static const uint8_t s_prelogin_aes_key[16] = {
-    'a', '0', '1', 'b', 'c', '2', '3', 'e',
-    'd', '4', '5', 'f', 'F', '5', '6', 'A',
-};
-static esp_ip4_addr_t s_camera_gateway;
-static bool s_camera_gateway_valid;
-// Set by camera_protocol_request_stop(); checked at least every receive
-// timeout (at most CAMERA_RUDP_RECEIVE_TIMEOUT_MS) by the session loops.
-static std::atomic<bool> s_stop_requested;
-
-static bool stop_requested(void)
-{
-    if (!s_stop_requested.load()) {
-        return false;
-    }
-    ESP_LOGI(TAG, "Camera session stop requested");
-    return true;
-}
-
-static esp_err_t build_prelogin_request(camera::PreLoginRequest *request)
-{
-    static const char *TAG_CRYPTO = "trailcamhub_wifi";
-    if (request == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    uint8_t plaintext[96];
-    uint8_t nonce[camera::kPreLoginNonceSize];
-    uint8_t ciphertext[96];
-    size_t json_len = 0;
-    time_t utc_time = time(NULL);
-
-    esp_fill_random(nonce, sizeof(nonce));
-    size_t ciphertext_len = camera::build_prelogin_plaintext(
-        utc_time, nonce, plaintext, sizeof(plaintext), &json_len);
-    if (ciphertext_len == 0) {
-        ESP_LOGE(TAG_CRYPTO, "Could not format PRE_LOGIN JSON payload");
-        return ESP_ERR_INVALID_SIZE;
-    }
-    if (utc_time < 1700000000) {
-        ESP_LOGW(TAG_CRYPTO,
-                 "System UTC time appears unset (%lld); "
-                 "PRE_LOGIN timestamp may be rejected",
-                 (long long)utc_time);
-    }
-    if (ciphertext_len > sizeof(ciphertext) ||
-        sizeof(s_prelogin_static_header) + ciphertext_len > UINT16_MAX) {
-        ESP_LOGE(TAG_CRYPTO, "PRE_LOGIN payload exceeds packet capacity");
-        memset(plaintext, 0, sizeof(plaintext));
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    mbedtls_aes_context aes;
-    mbedtls_aes_init(&aes);
-    int mbedtls_error = mbedtls_aes_setkey_enc(&aes, s_prelogin_aes_key, 128);
-    if (mbedtls_error == 0) {
-        for (size_t offset = 0; offset < ciphertext_len; offset += 16) {
-            mbedtls_error =
-                mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT,
-                                      plaintext + offset, ciphertext + offset);
-            if (mbedtls_error != 0) {
-                break;
-            }
-        }
-    }
-    mbedtls_aes_free(&aes);
-    memset(plaintext, 0, sizeof(plaintext));
-    if (mbedtls_error != 0) {
-        ESP_LOGE(TAG_CRYPTO, "PRE_LOGIN AES encryption failed: %d",
-                 mbedtls_error);
-        memset(ciphertext, 0, sizeof(ciphertext));
-        return ESP_FAIL;
-    }
-
-    size_t body_len = sizeof(s_prelogin_static_header) + ciphertext_len;
-    uint8_t body[sizeof(s_prelogin_static_header) + sizeof(ciphertext)];
-    memcpy(body, s_prelogin_static_header, sizeof(s_prelogin_static_header));
-    memcpy(body + sizeof(s_prelogin_static_header), ciphertext, ciphertext_len);
-    bool built = request->build(body, body_len);
-    memset(body, 0, body_len);
-    memset(ciphertext, 0, sizeof(ciphertext));
-    if (!built) {
-        ESP_LOGE(TAG_CRYPTO, "PRE_LOGIN packet exceeds supported size");
-        return ESP_ERR_INVALID_SIZE;
-    }
-    ESP_LOGD(TAG_CRYPTO,
-             "Built PRE_LOGIN with %u-byte JSON, %u-byte "
-             "ciphertext, UTC timestamp %lld",
-             (unsigned)json_len, (unsigned)ciphertext_len, (long long)utc_time);
-    return ESP_OK;
-}
-
-// Sets the socket receive timeout. lwIP converts SO_RCVTIMEO to whole
-// milliseconds and treats 0 as "wait forever", so the timeout is rounded up
-// and never shorter than 1 ms.
-// The receive timeout last set, so that an unchanged one costs no system call
-// (it is set before every received frame, about 14,000 times per video).
-// Reset when a socket is created, since a new socket may get the same number.
-static int s_timeout_socket = -1;
-static int64_t s_timeout_ms = -1;
-
-static esp_err_t set_receive_timeout(int socket_fd, int64_t timeout_us,
-                                     const char *context)
-{
-    int64_t timeout_ms = (timeout_us + 999) / 1000;
-    if (timeout_ms < 1) {
-        timeout_ms = 1;
-    }
-    if (socket_fd == s_timeout_socket && timeout_ms == s_timeout_ms) {
-        return ESP_OK;
-    }
-    struct timeval timeout = {};
-    timeout.tv_sec = static_cast<decltype(timeout.tv_sec)>(timeout_ms / 1000);
-    timeout.tv_usec =
-        static_cast<decltype(timeout.tv_usec)>((timeout_ms % 1000) * 1000);
-    if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-                   sizeof(timeout)) < 0) {
-        ESP_LOGE(TAG, "Could not set %s receive timeout: errno %d", context,
-                 errno);
-        s_timeout_socket = -1;
-        return ESP_FAIL;
-    }
-    s_timeout_socket = socket_fd;
-    s_timeout_ms = timeout_ms;
-    return ESP_OK;
-}
-
-// Logs a packet that is not handled in the current state, naming its type.
-static void log_ignored_packet(const char *state, const uint8_t *packet,
-                               size_t packet_len)
-{
-    if (packet_len >= 2 && packet[0] == 0xf1) {
-        ESP_LOGW(TAG, "Ignoring %u-byte packet type 0x%02X while %s",
-                 (unsigned)packet_len, packet[1], state);
-    } else {
-        ESP_LOGW(TAG, "Ignoring %u-byte packet without F1 prefix while %s",
-                 (unsigned)packet_len, state);
-    }
-}
-
-static esp_err_t send_udp_request(int socket_fd,
-                                  const struct sockaddr_in *destination,
-                                  const char *request_name,
-                                  const camera::UdpRequest &request)
-{
-    ssize_t sent = camera_udp_send_packet(
-        socket_fd, request.data(), request.size(), destination, request_name);
-    if (sent < 0 || static_cast<size_t>(sent) != request.size()) {
-        return ESP_FAIL;
-    }
-    return ESP_OK;
-}
-
-// Sends session packets to the camera over the bound UDP socket.
-class UdpTransport final : public camera::pppp::Transport
-{
-  public:
-    void set_destination(int socket_fd, const struct sockaddr_in &destination)
-    {
-        socket_fd_ = socket_fd;
-        destination_ = destination;
-    }
-
-    bool send(const uint8_t *data, size_t size, const char *context) override
-    {
-        ssize_t sent = camera_udp_send_packet(socket_fd_, data, size,
-                                              &destination_, context);
-        return sent >= 0 && static_cast<size_t>(sent) == size;
-    }
-
-  private:
-    int socket_fd_ = -1;
-    struct sockaddr_in destination_ = {};
-};
-
+using camera::link::from_camera;
+using camera::link::log_session_event;
+using camera::link::send_udp_request;
+using camera::link::set_receive_timeout;
+using camera::link::stop_requested;
 using SessionEvent = camera::pppp::Session::Event;
 
-static UdpTransport s_transport;
+static camera::link::UdpTransport s_transport;
 // Static because it holds the DATA packets awaiting acknowledgement.
 // In PSRAM where the build allows it (about 8 KB; internal RAM is short).
 EXT_RAM_BSS_ATTR static camera::pppp::Session s_session(s_transport);
@@ -489,122 +307,6 @@ static PendingVideo s_pending_video;
 static void complete_pending_video(bool wait);
 // Set when writing a pending video failed: no further downloads.
 static bool s_stop_downloads;
-
-static bool from_camera(const struct sockaddr_in *source,
-                        const struct sockaddr_in *camera_address)
-{
-    return source->sin_addr.s_addr == camera_address->sin_addr.s_addr &&
-           source->sin_port == camera_address->sin_port;
-}
-
-static uint32_t read_le32(const uint8_t *bytes)
-{
-    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
-           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
-}
-
-static void log_received_data(const SessionEvent &event)
-{
-    static const uint8_t kArtemisSignature[] = {'A', 'R', 'T', 'E',
-                                                'M', 'I', 'S', 0};
-    if (event.payload_size >= 20 && memcmp(event.payload, kArtemisSignature,
-                                           sizeof(kArtemisSignature)) == 0) {
-        ESP_LOGI(TAG,
-                 "Received ARTEMIS DATA index %u: message type %lu, "
-                 "sequence %lu, %lu payload bytes",
-                 event.index, (unsigned long)read_le32(event.payload + 8),
-                 (unsigned long)read_le32(event.payload + 12),
-                 (unsigned long)read_le32(event.payload + 16));
-    } else {
-        ESP_LOGI(TAG, "Received DATA index %u (%u bytes)", event.index,
-                 (unsigned)event.payload_size);
-    }
-}
-
-// Logs session events shared by all phases. Returns true if the camera
-// closed the session.
-static bool log_session_event(const SessionEvent &event, const uint8_t *packet,
-                              size_t packet_len, const char *state)
-{
-    switch (event.type) {
-    case SessionEvent::Type::data:
-        log_received_data(event);
-        break;
-    case SessionEvent::Type::duplicate_data:
-        ESP_LOGD(TAG, "Acknowledged repeated DATA index %u", event.index);
-        break;
-    case SessionEvent::Type::ack:
-        ESP_LOGD(TAG, "Camera acknowledged index %u", event.index);
-        break;
-    case SessionEvent::Type::alive:
-        ESP_LOGI(TAG, "Answered camera ALIVE");
-        break;
-    case SessionEvent::Type::close:
-        ESP_LOGW(TAG, "Camera closed the session (CLOSE)");
-        return true;
-    case SessionEvent::Type::discovery_reply:
-        ESP_LOGD(TAG, "Ignoring repeated camera discovery reply");
-        break;
-    case SessionEvent::Type::unhandled:
-        log_ignored_packet(state, packet, packet_len);
-        break;
-    }
-    return false;
-}
-
-static esp_err_t
-send_artemis_handshake(int socket_fd, const struct sockaddr_in *camera_address)
-{
-    // The hello is the login (cmdId 0). The camera sets its clock from the
-    // time in it, so it carries the current wall clock when the device has a
-    // time that it can vouch for (SNTP, the backend or a browser). Without
-    // one the time is left out and the camera keeps its own: a fixed time
-    // would set its clock back at every session, and a time that came from
-    // the camera itself must not be given back to it.
-    const time_t now = time(NULL);
-    const bool send_time = time_sync_trusted();
-    const int64_t camera_time = send_time ? camera::camera_wall_clock(now) : 0;
-    if (send_time) {
-        ESP_LOGI(TAG, "Login sets the camera clock to %lld (UTC %lld)",
-                 (long long)camera_time, (long long)now);
-    } else if (time_sync_clock_valid()) {
-        ESP_LOGW(TAG, "The clock comes from the camera; login without a time");
-    } else {
-        ESP_LOGW(TAG, "The clock is not set; login without a time, the camera "
-                      "keeps its own clock");
-    }
-    const std::vector<uint8_t> hello = camera::artemis::build_request(
-        s_command_cipher, 1, camera::artemis::build_login_json(camera_time));
-    uint16_t hello_index = 0;
-    if (hello.empty() ||
-        !s_session.send_data(hello.data(), hello.size(), esp_timer_get_time(),
-                             "ARTEMIS Hello", &hello_index)) {
-        ESP_LOGE(TAG, "Could not send ARTEMIS Hello");
-        return ESP_FAIL;
-    }
-    ESP_LOGI(TAG, "ARTEMIS Hello sent with index %u", hello_index);
-    vTaskDelay(pdMS_TO_TICKS(50));
-
-    camera::ArtemisMagicRequest magic_one;
-    if (!magic_one.build(camera::ArtemisMagicRequest::Stage::first)) {
-        ESP_LOGE(TAG, "Could not build ARTEMIS Magic 1 request");
-        return ESP_ERR_INVALID_SIZE;
-    }
-    esp_err_t error = send_udp_request(socket_fd, camera_address,
-                                       "ARTEMIS Magic 1", magic_one);
-    if (error != ESP_OK) {
-        return error;
-    }
-    vTaskDelay(pdMS_TO_TICKS(20));
-
-    camera::ArtemisMagicRequest magic_two;
-    if (!magic_two.build(camera::ArtemisMagicRequest::Stage::second)) {
-        ESP_LOGE(TAG, "Could not build ARTEMIS Magic 2 request");
-        return ESP_ERR_INVALID_SIZE;
-    }
-    return send_udp_request(socket_fd, camera_address, "ARTEMIS Magic 2",
-                            magic_two);
-}
 
 // Sends a token-authenticated ARTEMIS command over the session. `extra_fields`
 // is inserted verbatim after cmdId (e.g. ",\"pageNo\":0"); it may be empty.
@@ -2270,198 +1972,6 @@ wait_for_artemis_packets(int socket_fd,
     return error;
 }
 
-static esp_err_t send_prelogin(int socket_fd,
-                               const struct sockaddr_in *camera_address,
-                               int64_t discovery_started_us)
-{
-    camera::PreLoginRequest request;
-    esp_err_t error = build_prelogin_request(&request);
-    if (error != ESP_OK) {
-        return error;
-    }
-
-    s_transport.set_destination(socket_fd, *camera_address);
-    s_session.reset();
-    error = send_udp_request(socket_fd, camera_address,
-                             "AES-encrypted PRE_LOGIN", request);
-    if (error != ESP_OK) {
-        return error;
-    }
-    int64_t sent_at_us = esp_timer_get_time();
-
-    // Wait for the camera's first DATA packet, which confirms PRE_LOGIN.
-    int64_t response_deadline_us =
-        sent_at_us + CAMERA_PRELOGIN_RECEIVE_TIMEOUT_MS * 1000;
-    while (!stop_requested()) {
-        int64_t remaining_us = response_deadline_us - esp_timer_get_time();
-        if (remaining_us <= 0) {
-            ESP_LOGW(TAG,
-                     "No DATA packet received within %u ms after "
-                     "PRE_LOGIN; handshake is not verified",
-                     CAMERA_PRELOGIN_RECEIVE_TIMEOUT_MS);
-            return ESP_ERR_TIMEOUT;
-        }
-
-        error = set_receive_timeout(socket_fd, remaining_us, "PRE_LOGIN");
-        if (error != ESP_OK) {
-            return error;
-        }
-
-        uint8_t response[256];
-        struct sockaddr_in source = {};
-        ssize_t received = camera_udp_receive_packet(
-            socket_fd, response, sizeof(response), &source, "PRE_LOGIN");
-        if (received < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                continue;
-            }
-            ESP_LOGE(TAG, "PRE_LOGIN response receive failed: errno %d", errno);
-            return ESP_FAIL;
-        }
-
-        int64_t received_at_us = esp_timer_get_time();
-        ESP_LOGI(TAG,
-                 "PRE_LOGIN response received +%lld ms after send / "
-                 "+%lld ms since discovery",
-                 (long long)((received_at_us - sent_at_us) / 1000),
-                 (long long)((received_at_us - discovery_started_us) / 1000));
-        if (!from_camera(&source, camera_address)) {
-            ESP_LOGW(TAG, "Ignoring UDP packet from unexpected endpoint");
-            continue;
-        }
-
-        const SessionEvent event =
-            s_session.handle_packet(response, static_cast<size_t>(received));
-        if (s_session.transport_failed()) {
-            return ESP_FAIL;
-        }
-        if (log_session_event(event, response, static_cast<size_t>(received),
-                              "waiting for the PRE_LOGIN response")) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        if (event.type == SessionEvent::Type::data) {
-            error = send_artemis_handshake(socket_fd, &source);
-            if (error != ESP_OK) {
-                return error;
-            }
-            return wait_for_artemis_packets(socket_fd, &source,
-                                            discovery_started_us);
-        }
-    }
-    return ESP_OK;
-}
-
-static esp_err_t discover_camera(void)
-{
-    int64_t discovery_started_us = esp_timer_get_time();
-    if (!s_camera_gateway_valid) {
-        ESP_LOGE(TAG, "Cannot discover camera because the Wi-Fi gateway "
-                      "address is unknown");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    int socket_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    s_timeout_socket = -1;
-    if (socket_fd < 0) {
-        ESP_LOGE(TAG, "Could not create camera discovery socket: errno %d",
-                 errno);
-        return ESP_FAIL;
-    }
-
-    struct sockaddr_in local = {};
-    local.sin_family = AF_INET;
-    local.sin_port = htons(CAMERA_DISCOVERY_LOCAL_PORT);
-    local.sin_addr.s_addr = htonl(INADDR_ANY);
-    ESP_LOGI(TAG, "Binding camera UDP socket to local port %u",
-             CAMERA_DISCOVERY_LOCAL_PORT);
-    if (bind(socket_fd, (struct sockaddr *)&local, sizeof(local)) < 0) {
-        ESP_LOGE(TAG,
-                 "Could not bind camera UDP socket to local port %u: "
-                 "errno %d",
-                 CAMERA_DISCOVERY_LOCAL_PORT, errno);
-        close(socket_fd);
-        return ESP_FAIL;
-    }
-
-    if (set_receive_timeout(socket_fd,
-                            CAMERA_DISCOVERY_RECEIVE_TIMEOUT_MS * 1000LL,
-                            "camera discovery") != ESP_OK) {
-        close(socket_fd);
-        return ESP_FAIL;
-    }
-
-    const camera::CameraDiscoveryRequest discovery_packet;
-    ESP_LOGI(TAG,
-             "Camera discovery target " IPSTR ", source UDP port %u, "
-             "payload %u bytes",
-             IP2STR(&s_camera_gateway), CAMERA_DISCOVERY_LOCAL_PORT,
-             static_cast<unsigned>(discovery_packet.size()));
-
-    for (size_t port_index = 0;
-         port_index <
-         sizeof(s_camera_discovery_ports) / sizeof(s_camera_discovery_ports[0]);
-         port_index++) {
-        struct sockaddr_in destination = {};
-        destination.sin_family = AF_INET;
-        destination.sin_port = htons(s_camera_discovery_ports[port_index]);
-        destination.sin_addr.s_addr = s_camera_gateway.addr;
-        esp_err_t error = send_udp_request(socket_fd, &destination,
-                                           "LBCS discovery", discovery_packet);
-        if (error != ESP_OK) {
-            close(socket_fd);
-            return ESP_FAIL;
-        }
-    }
-
-    while (!stop_requested() &&
-           (esp_timer_get_time() - discovery_started_us) / 1000 <
-               CAMERA_DISCOVERY_TIMEOUT_MS) {
-        uint8_t response[256];
-        struct sockaddr_in source = {};
-        ssize_t received = camera_udp_receive_packet(
-            socket_fd, response, sizeof(response), &source, "camera discovery");
-        if (received < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                continue;
-            }
-            ESP_LOGE(TAG, "Camera discovery receive failed: errno %d", errno);
-            close(socket_fd);
-            return ESP_FAIL;
-        }
-
-        ESP_LOGI(
-            TAG, "Camera discovery reply received +%lld ms after start",
-            (long long)((esp_timer_get_time() - discovery_started_us) / 1000));
-
-        if (received > 4 && response[0] == 0xf1 &&
-            source.sin_addr.s_addr == s_camera_gateway.addr) {
-            ESP_LOGI(TAG,
-                     "Camera UDP response accepted; using source port "
-                     "%u for PRE_LOGIN",
-                     ntohs(source.sin_port));
-            esp_err_t prelogin_error =
-                send_prelogin(socket_fd, &source, discovery_started_us);
-            close(socket_fd);
-            return prelogin_error;
-        }
-        ESP_LOGW(TAG,
-                 "UDP packet did not match camera response "
-                 "(expected F1 prefix from gateway " IPSTR ")",
-                 IP2STR(&s_camera_gateway));
-    }
-
-    close(socket_fd);
-    if (s_stop_requested.load()) {
-        return ESP_OK;
-    }
-    ESP_LOGW(TAG,
-             "No matching camera discovery response after %lld ms "
-             "(target " IPSTR ", source UDP port %u)",
-             (long long)((esp_timer_get_time() - discovery_started_us) / 1000),
-             IP2STR(&s_camera_gateway), CAMERA_DISCOVERY_LOCAL_PORT);
-    return ESP_ERR_TIMEOUT;
-}
-
 // Frees the buffers of the session's containers: clear() and reset() keep
 // their capacity, and allocations below CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL
 // are in internal RAM. After a session they held about 14 KB of it, so the
@@ -2476,17 +1986,44 @@ static void release_session_memory(void)
     std::string().swap(s_camera_id);
 }
 
+// Finds the camera, logs in and runs the session on the camera's UDP socket.
+static esp_err_t connect_and_run_session(const esp_ip4_addr_t &gateway)
+{
+    const int64_t discovery_started_us = esp_timer_get_time();
+    int socket_fd = -1;
+    struct sockaddr_in camera_address = {};
+    esp_err_t error = camera::link::discover_camera(
+        gateway, discovery_started_us, &socket_fd, &camera_address);
+    if (error != ESP_OK || socket_fd < 0) {
+        return error;
+    }
+
+    struct sockaddr_in data_source = {};
+    bool confirmed = false;
+    error = camera::link::exchange_prelogin(
+        socket_fd, camera_address, s_transport, s_session, discovery_started_us,
+        &data_source, &confirmed);
+    if (error == ESP_OK && confirmed) {
+        error = camera::link::send_login(socket_fd, data_source, s_session,
+                                         s_command_cipher);
+        if (error == ESP_OK) {
+            error = wait_for_artemis_packets(socket_fd, &data_source,
+                                             discovery_started_us);
+        }
+    }
+    close(socket_fd);
+    return error;
+}
+
 esp_err_t camera_protocol_run(const esp_ip4_addr_t *gateway)
 {
     if (gateway == NULL || gateway->addr == 0) {
         ESP_LOGE(TAG, "Cannot start camera protocol without a valid gateway");
         return ESP_ERR_INVALID_ARG;
     }
-    s_camera_gateway = *gateway;
-    s_camera_gateway_valid = true;
-    s_stop_requested = false;
+    camera::link::clear_stop();
     camera::store::sd_writer_begin_session();
-    const esp_err_t error = discover_camera();
+    const esp_err_t error = connect_and_run_session(*gateway);
     camera::store::sd_writer_end_session();
     // All requested work is done: record the sync with the camera.
     if (s_work_done && !s_camera_id.empty() &&
@@ -2500,7 +2037,7 @@ esp_err_t camera_protocol_run(const esp_ip4_addr_t *gateway)
 
 void camera_protocol_request_stop(void)
 {
-    s_stop_requested = true;
+    camera::link::request_stop();
 }
 
 bool camera_protocol_work_completed(void)
