@@ -249,4 +249,48 @@ const char *to_string(Outcome outcome)
     return "unknown";
 }
 
+FrontEndPhase front_end_phase(State state, Outcome last_outcome)
+{
+    switch (state) {
+    case State::idle:
+        return last_outcome == Outcome::camera_scanned ||
+                       last_outcome == Outcome::uplink_done
+                   ? FrontEndPhase::finished
+                   : FrontEndPhase::idle;
+    case State::ble_activation:
+        return FrontEndPhase::searching;
+    case State::wifi_join:
+        return FrontEndPhase::connecting;
+    case State::session:
+        return FrontEndPhase::connected;
+    case State::backoff:
+        return FrontEndPhase::retry_wait;
+    case State::uplink_join:
+    case State::uplink:
+        return FrontEndPhase::uploading;
+    }
+    return FrontEndPhase::idle;
+}
+
+const char *to_string(FrontEndPhase phase)
+{
+    switch (phase) {
+    case FrontEndPhase::idle:
+        return "idle";
+    case FrontEndPhase::searching:
+        return "searching";
+    case FrontEndPhase::connecting:
+        return "connecting";
+    case FrontEndPhase::connected:
+        return "connected";
+    case FrontEndPhase::retry_wait:
+        return "retry_wait";
+    case FrontEndPhase::uploading:
+        return "uploading";
+    case FrontEndPhase::finished:
+        return "finished";
+    }
+    return "idle";
+}
+
 }  // namespace session
