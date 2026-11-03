@@ -5,8 +5,10 @@
 //
 // The host's /dev is bind-mounted, so boards that are plugged in later, or
 // that enumerate again after a reset (USB-Serial-JTAG), appear without a
-// rebuild. With rootless Docker the container's root is the host user, so the
-// host user needs read and write access to the serial devices; see
+// rebuild. No --privileged: with rootful Docker, the device cgroup rules let
+// the container open only serial devices (ttyACM, ttyUSB), not disks or other
+// devices. Meant for rootless Docker, where the container's root is the host
+// user, so the host user needs read and write access to the serial devices; see
 // .devcontainer/hardware/README.md. Apart from that, keep this file in step
 // with ../devcontainer.json.
 {
@@ -20,7 +22,10 @@
   "workspaceFolder": "/project",
   "remoteUser": "root",
   "userEnvProbe": "loginInteractiveShell",
-  "runArgs": ["--privileged"],
+  "runArgs": [
+    "--device-cgroup-rule=c 166:* rmw", // ttyACM: USB-Serial-JTAG (C5, S3, P4), CH343
+    "--device-cgroup-rule=c 188:* rmw"  // ttyUSB: CH34x and other USB-UART bridges
+  ],
   "containerEnv": {
     "IDF_PATH": "/opt/esp/idf",
     "IDF_CCACHE_ENABLE": "1"

@@ -3,7 +3,8 @@
 # firmware CI, plus the tools that the other CI checks use.
 FROM espressif/idf:v5.5.6
 
-# jq for scripts, usbutils (lsusb) to find boards.
+# jq for scripts, usbutils (lsusb) to find boards. The base image already has
+# build-essential (g++ 13 for the host tests).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends jq usbutils \
     && rm -rf /var/lib/apt/lists/*

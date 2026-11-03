@@ -7,6 +7,24 @@ Reopen in Container**. The default configuration in `.devcontainer/` has no
 device access and is the one Codespaces uses. Both build the same image
 (`.devcontainer/Dockerfile`) and share the cache volumes.
 
+## What the container may access
+
+The container does not run with `--privileged`. It sees all nodes of the
+host's `/dev`, but two device cgroup rules allow it to open only character
+devices with the major numbers of the serial ports: 166 (`ttyACM`:
+USB-Serial-JTAG, CH343) and 188 (`ttyUSB`: CH34x and other USB-UART bridges).
+
+The configuration is meant for **rootless Docker**: there the container's
+`root` is the host user and has no more rights than that user. The device
+cgroup rules do not restrict anything in this case; the host user's
+permissions decide (see the host setup below).
+
+With **rootful Docker** the container's `root` is the host's `root`. The
+device cgroup rules then keep disks and all other devices closed, but the
+container can open every serial device of the host, whatever its owner and
+mode. Claude Code runs in this container; keep that in mind before you use the
+configuration with rootful Docker.
+
 ## Host setup (Linux)
 
 The container can only open a device that the host user can open. With
