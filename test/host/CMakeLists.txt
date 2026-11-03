@@ -60,6 +60,7 @@ add_executable(host_tests
     test_playback.cpp
     test_playback_decoder.cpp
     test_prelogin.cpp
+    test_video_stats.cpp
     test_schedule_plan.cpp
     test_sd_log_files.cpp
     test_session_fsm.cpp
@@ -86,6 +87,7 @@ add_executable(host_tests
     ${link_dir}/bulk_reassembler.cpp
     ${link_dir}/bulk_stream.cpp
     ${link_dir}/frame_reorder.cpp
+    ${link_dir}/video_stats.cpp
     ${link_dir}/playback_decoder.cpp
     ${link_dir}/playback_record.cpp
     ${link_dir}/playback_stream.cpp
