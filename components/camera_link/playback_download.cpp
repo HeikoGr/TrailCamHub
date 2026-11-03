@@ -54,7 +54,7 @@ constexpr std::size_t kTraceEvents = 65536;
 
 PlaybackDownload::PlaybackDownload(const camera::artemis::Aes128 &cipher,
                                    std::size_t reorder_frames, Host host)
-    : host_(std::move(host)), reorder_frames_(reorder_frames),
+    : host_(host), reorder_frames_(reorder_frames),
       playback_(reorder_frames, CAMERA_VIDEO_MAX_RECORD),
       decoder_(
           cipher,

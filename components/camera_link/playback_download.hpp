@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <string>
 
 #include "artemis_aes128.hpp"
@@ -20,6 +19,7 @@
 #include "playback_policy.hpp"
 #include "playback_stream.hpp"
 #include "video_stats.hpp"
+#include "sdkconfig.h"
 
 namespace camera::link
 {
@@ -27,28 +27,28 @@ namespace camera::link
 class PlaybackDownload
 {
   public:
-    // What the download asks of the session.
+    // What the download asks of the session. Plain function pointers: the
+    // session's callbacks capture nothing, and std::function would cost
+    // internal RAM on boards that are short of it.
     struct Host {
         // Sends a token-authenticated ARTEMIS command; `extra` is inserted
         // after cmdId.
-        std::function<bool(std::uint32_t cmd_id, const char *extra,
-                           const char *context)>
-            send_command;
+        bool (*send_command)(std::uint32_t cmd_id, const char *extra,
+                             const char *context);
         // Adds playback frame `seq` (subtype 0x02) to the next bulk ACK.
-        std::function<void(std::uint16_t seq)> queue_ack;
+        void (*queue_ack)(std::uint16_t seq);
         // Writing `size` bytes is about to wait for the SD card: send the
         // pending ACK now.
-        std::function<void(std::size_t size)> before_sd_wait;
+        void (*before_sd_wait)(std::size_t size);
         // The stream advanced at `now_us` (a frame was taken).
-        std::function<void(std::int64_t now_us)> progress;
+        void (*progress)(std::int64_t now_us);
         // The current download ends: `stored` if the video is kept,
         // `stop_all` if the SD card failed.
-        std::function<void(bool stored, bool stop_all)> finish_download;
+        void (*finish_download)(bool stored, bool stop_all);
         // The SD writer has written a video that ended earlier: `stored` if
         // it is on the card; `sd_failed` if writing it failed.
-        std::function<void(const camera::artemis::CatalogEntry &entry,
-                           bool stored, bool sd_failed)>
-            pending_done;
+        void (*pending_done)(const camera::artemis::CatalogEntry &entry,
+                             bool stored, bool sd_failed);
     };
 
     PlaybackDownload(const camera::artemis::Aes128 &cipher,
@@ -199,6 +199,7 @@ class PlaybackDownload
     VideoFiles *current_ = &files_[0];
     PendingVideo pending_ = {};
 
+#if CONFIG_CAMERA_VIDEO_TRACE
     // Trace of the frames and ACKs (CONFIG_CAMERA_VIDEO_TRACE).
     struct TraceEvent {
         std::uint32_t time_us;
@@ -211,6 +212,7 @@ class PlaybackDownload
     std::size_t trace_count_ = 0;
     std::int64_t trace_started_us_ = 0;
     std::int16_t trace_acks_ = 0;
+#endif
 };
 
 }  // namespace camera::link
