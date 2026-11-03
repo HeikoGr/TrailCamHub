@@ -200,6 +200,12 @@ session_front_end_phase_t front_end_of(session::FrontEndPhase phase)
         return SESSION_FRONT_END_UPLOADING;
     case session::FrontEndPhase::finished:
         return SESSION_FRONT_END_FINISHED;
+    case session::FrontEndPhase::not_found:
+        return SESSION_FRONT_END_NOT_FOUND;
+    case session::FrontEndPhase::upload_failed:
+        return SESSION_FRONT_END_UPLOAD_FAILED;
+    case session::FrontEndPhase::stopped:
+        return SESSION_FRONT_END_STOPPED;
     }
     return SESSION_FRONT_END_IDLE;
 }

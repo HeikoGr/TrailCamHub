@@ -72,6 +72,15 @@ static void on_session_status(const session_status_t *status, void *context)
     case SESSION_FRONT_END_FINISHED:
         phase = DONGLE_UI_FINISHED;
         break;
+    case SESSION_FRONT_END_NOT_FOUND:
+        phase = DONGLE_UI_NOT_FOUND;
+        break;
+    case SESSION_FRONT_END_UPLOAD_FAILED:
+        phase = DONGLE_UI_UPLOAD_FAILED;
+        break;
+    case SESSION_FRONT_END_STOPPED:
+        phase = DONGLE_UI_STOPPED;
+        break;
     }
 #if CONFIG_BOARD_TDONGLE
     if (s_display_ready) {

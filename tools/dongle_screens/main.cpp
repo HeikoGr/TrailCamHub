@@ -64,6 +64,12 @@ int main(int argc, char **argv)
         {"retry", ui::make_screen(ui::Phase::retry_wait, "", 12)},
         {"finished", ui::make_screen(ui::Phase::finished, "TrailCam_DA63", 0,
                                      {3, 3, 3}, kWeb)},
+        {"not-found",
+         ui::make_screen(ui::Phase::not_found, "", 0, {0, 0, 0}, kWeb)},
+        {"upload-failed", ui::make_screen(ui::Phase::upload_failed,
+                                          "TrailCam_DA63", 0, {3, 3, 3}, kWeb)},
+        {"stopped",
+         ui::make_screen(ui::Phase::stopped, "", 0, {0, 0, 0}, kWeb)},
     };
     std::vector<std::uint16_t> frame(ui::kScreenWidth * ui::kScreenHeight);
     for (const Example &example : examples) {

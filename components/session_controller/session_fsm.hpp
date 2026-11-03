@@ -80,6 +80,10 @@ enum class FrontEndPhase : std::uint8_t {
     retry_wait,  // waiting for the next camera attempt
     uploading,   // home Wi-Fi and backend sync
     finished,    // idle after a successful cycle
+    // Idle after a cycle that did not succeed; shown until the next one.
+    not_found,      // all camera attempts failed
+    upload_failed,  // the home Wi-Fi could not be joined
+    stopped,        // ended early by a stop request
 };
 
 // Front-end phase for the FSM `state`; `last_outcome` is the outcome of the
