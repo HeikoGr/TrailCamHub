@@ -1,6 +1,8 @@
 #include "media_store.hpp"
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -12,6 +14,7 @@
 #include "artemis_json.hpp"
 #include "camera_clock.hpp"
 #include "esp_log.h"
+#include "media_files.hpp"
 #include "sd_card.h"
 
 namespace camera::store
@@ -68,6 +71,119 @@ bool read_file(const std::string &path, std::string &out)
     return ok;
 }
 
+bool file_exists(const std::string &path)
+{
+    struct stat st;
+    return stat(path.c_str(), &st) == 0;
+}
+
+// Names of the plain files in `dir`; empty if it does not exist.
+std::vector<std::string> list_files(const std::string &dir)
+{
+    std::vector<std::string> names;
+    DIR *d = opendir(dir.c_str());
+    if (d == nullptr)
+        return names;
+    while (struct dirent *entry = readdir(d)) {
+        if (entry->d_type != DT_DIR)
+            names.push_back(entry->d_name);
+    }
+    closedir(d);
+    return names;
+}
+
+struct MigrationCount {
+    unsigned renamed = 0;
+    unsigned removed = 0;
+    unsigned failed = 0;
+};
+
+// Moves the files in `dir` from <dir>_<num>.<rest> to <mediaId>.<rest> by the
+// plan. Partial downloads (".part") and files of an ambiguous dir/num are
+// removed; files of a dir/num the catalog does not know are left alone.
+void migrate_dir(const std::string &dir,
+                 const camera::store::LegacyFilePlan &plan,
+                 MigrationCount &count)
+{
+    for (const std::string &name : list_files(dir)) {
+        std::int64_t dir_num = 0;
+        std::int64_t media_num = 0;
+        std::string rest;
+        if (!camera::store::parse_legacy_name(name, dir_num, media_num, rest))
+            continue;
+        const std::string old_path = dir + "/" + name;
+        const std::pair<std::int64_t, std::int64_t> key{dir_num, media_num};
+        const bool partial =
+            rest.size() >= 5 && rest.compare(rest.size() - 5, 5, ".part") == 0;
+        const auto owner = plan.owner.find(key);
+        const bool ambiguous =
+            std::find(plan.ambiguous.begin(), plan.ambiguous.end(), key) !=
+            plan.ambiguous.end();
+        if (partial || ambiguous) {
+            if (remove(old_path.c_str()) == 0)
+                count.removed++;
+            else
+                count.failed++;
+            continue;
+        }
+        if (owner == plan.owner.end())
+            continue;
+        const std::string new_path =
+            dir + "/" + camera::store::media_base_name(owner->second) + "." +
+            rest;
+        if (file_exists(new_path)) {
+            // Already stored under the new name: that one is newer.
+            if (remove(old_path.c_str()) == 0)
+                count.removed++;
+            else
+                count.failed++;
+            continue;
+        }
+        if (rename(old_path.c_str(), new_path.c_str()) == 0) {
+            count.renamed++;
+        } else {
+            ESP_LOGW(TAG, "rename %s failed: errno %d", old_path.c_str(),
+                     errno);
+            count.failed++;
+        }
+    }
+}
+
+// Renames the files of a catalog before v3 from dir/num to the mediaId and
+// fixes the flags that no longer hold. Safe to run again.
+void migrate_legacy_files(const std::string &camera_id,
+                          camera::artemis::MediaCatalog &catalog)
+{
+    using camera::artemis::MediaCatalog;
+    const camera::store::LegacyFilePlan plan =
+        camera::store::plan_legacy_files(catalog);
+    const std::string base = camera_dir(camera_id);
+    MigrationCount count;
+    migrate_dir(base + "/thumb", plan, count);
+    migrate_dir(base + "/media", plan, count);
+
+    for (const std::int64_t id : plan.ambiguous_media_ids) {
+        catalog.clear_flag(id, MediaCatalog::kThumbPresent);
+        catalog.clear_flag(id, MediaCatalog::kFileDownloaded);
+    }
+    // A thumbnail that is not there (any more) is fetched again.
+    unsigned missing = 0;
+    for (const camera::artemis::CatalogEntry &e : catalog.entries()) {
+        if ((e.flags & MediaCatalog::kThumbPresent) != 0 &&
+            !file_exists(
+                camera::store::thumbnail_path(camera_id, e.media_id))) {
+            catalog.clear_flag(e.media_id, MediaCatalog::kThumbPresent);
+            missing++;
+        }
+    }
+    ESP_LOGI(TAG,
+             "Catalog %s v%d: files renamed to mediaId: %u renamed, %u "
+             "removed, %u failed; %u ambiguous items, %u thumbnails missing",
+             camera_id.c_str(), catalog.format_version(), count.renamed,
+             count.removed, count.failed,
+             (unsigned)plan.ambiguous_media_ids.size(), missing);
+}
+
 bool write_file(const std::string &path, const void *data, size_t size)
 {
     FILE *f = fopen(path.c_str(), "wb");
@@ -100,6 +216,15 @@ bool load_catalog(const std::string &camera_id,
         out.clear();
         return false;
     }
+    if (out.format_version() < camera::artemis::MediaCatalog::kFormatVersion) {
+        migrate_legacy_files(camera_id, out);
+        if (!save_catalog(camera_id, out)) {
+            // The next load runs the migration again; it finds nothing to
+            // rename then.
+            ESP_LOGW(TAG, "Could not save the migrated catalog %s",
+                     path.c_str());
+        }
+    }
     return true;
 }
 
@@ -123,9 +248,9 @@ bool save_catalog(const std::string &camera_id,
     return true;
 }
 
-bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
-                     std::int64_t num, const std::uint8_t *jpeg,
-                     std::size_t size, std::int64_t media_time)
+bool write_thumbnail(const std::string &camera_id, std::int64_t media_id,
+                     const std::uint8_t *jpeg, std::size_t size,
+                     std::int64_t media_time)
 {
     if (jpeg == nullptr || size == 0)
         return false;
@@ -135,7 +260,7 @@ bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
     const std::string thumbs = base + "/thumb";
     if (!ensure_dir(thumbs))
         return false;
-    const std::string path = thumbnail_path(camera_id, dir, num);
+    const std::string path = thumbnail_path(camera_id, media_id);
     if (!write_file(path, jpeg, size))
         return false;
     // Date the thumbnail with the capture rather than the sync.
@@ -183,18 +308,15 @@ bool append_line(const std::string &camera_id, const char *name,
     return ok;
 }
 
-bool MediaFileWriter::open(const std::string &camera_id, std::int64_t dir,
-                           std::int64_t num, const char *extension,
-                           bool buffered)
+bool MediaFileWriter::open(const std::string &camera_id, std::int64_t media_id,
+                           const char *extension, bool buffered)
 {
     abort();
     const std::string camera = camera_dir(camera_id);
     const std::string media = camera + "/media";
     if (!ensure_dir(camera) || !ensure_dir(media))
         return false;
-    char name[48];
-    snprintf(name, sizeof(name), "/%lld_%lld", (long long)dir, (long long)num);
-    base_ = media + name;
+    base_ = media + "/" + media_base_name(media_id);
     extension_ = extension != nullptr ? extension : "";
     path_.clear();
     head_size_ = 0;
@@ -272,13 +394,10 @@ std::string MediaFileWriter::part_path() const
                               : base_ + "." + extension_ + ".part";
 }
 
-std::string thumbnail_path(const std::string &camera_id, std::int64_t dir,
-                           std::int64_t num)
+std::string thumbnail_path(const std::string &camera_id, std::int64_t media_id)
 {
-    char name[48];
-    snprintf(name, sizeof(name), "/thumb/%lld_%lld.jpg", (long long)dir,
-             (long long)num);
-    return camera_dir(camera_id) + name;
+    return camera_dir(camera_id) + "/thumb/" + media_base_name(media_id) +
+           ".jpg";
 }
 
 bool save_camera_info(const camera::artemis::DeviceInfo &info,

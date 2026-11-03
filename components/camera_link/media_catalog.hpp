@@ -59,11 +59,6 @@ class MediaCatalog
     // The listed entry with this dir/num (unique on the card at one time), or
     // nullptr. For answers of the camera, which name dir/num.
     const CatalogEntry *find_listed(std::int64_t dir, std::int64_t num) const;
-    // The entry with this dir/num: the listed one if any, otherwise the one
-    // added last. Only for interfaces that do not carry the mediaId yet (the
-    // backend API, see #85).
-    const CatalogEntry *find_by_dir_num(std::int64_t dir,
-                                        std::int64_t num) const;
 
     bool set_flag(std::int64_t media_id, Flag flag);
     bool clear_flag(std::int64_t media_id, Flag flag);
@@ -94,19 +89,29 @@ class MediaCatalog
     }
     std::size_t count_with_flag(Flag flag) const;
 
-    // CSV with a version header line (v2). parse() replaces the contents and
+    // CSV with a version header line (v3). parse() replaces the contents and
     // returns false if the header/version is not recognised. It also reads
-    // v1, which had the same columns but was keyed by dir/num; rows without
-    // a valid mediaId and repeated mediaIds are dropped.
+    // v1 (keyed by dir/num) and v2 (files on the SD card still named by
+    // dir/num), which have the same columns; rows without a valid mediaId and
+    // repeated mediaIds are dropped.
     std::string serialize() const;
     bool parse(const std::string &text);
+    // The version parse() read (1, 2 or 3); 0 for a new catalog. Below 3 the
+    // files on the SD card are still named by dir/num.
+    int format_version() const
+    {
+        return version_;
+    }
+    static constexpr int kFormatVersion = 3;
     void clear()
     {
         entries_.clear();
+        version_ = 0;
     }
 
   private:
     std::vector<CatalogEntry> entries_;
+    int version_ = 0;
 };
 
 }  // namespace camera::artemis

@@ -3,8 +3,10 @@
 // Persists per-camera media on the SD card: the catalog CSV, the thumbnail
 // JPEGs and the downloaded photos and videos, laid out as
 //     /sdcard/<camera-id>/catalog.csv
-//     /sdcard/<camera-id>/thumb/<dir>_<num>.jpg
-//     /sdcard/<camera-id>/media/<dir>_<num>.<jpg|mp4|mov|avi|bin>
+//     /sdcard/<camera-id>/thumb/<mediaId>.jpg
+//     /sdcard/<camera-id>/media/<mediaId>.<jpg|mp4|mov|avi|bin|h264|aac>
+// Files are named by the mediaId, which the camera never reuses (see
+// media_files.hpp and docs/media-identity.md).
 // Only the filesystem-id sanitiser and the file-type detection are pure (and
 // host-tested); the read/write functions use stdio against the mounted SD card.
 
@@ -59,7 +61,8 @@ inline const char *media_extension(const std::uint8_t *head, std::size_t size)
 
 // Loads the catalog for `camera_id`. A missing file is treated as an empty
 // catalog and still returns true; false means the SD card or file could not be
-// read, or the file was not a valid catalog.
+// read, or the file was not a valid catalog. A catalog before v3 has its files
+// renamed from dir/num to the mediaId and is saved as v3 right away.
 bool load_catalog(const std::string &camera_id,
                   camera::artemis::MediaCatalog &out);
 
@@ -67,13 +70,13 @@ bool load_catalog(const std::string &camera_id,
 bool save_catalog(const std::string &camera_id,
                   const camera::artemis::MediaCatalog &catalog);
 
-// Writes a thumbnail JPEG for (dir, num), creating directories as needed, and
+// Writes a recording's thumbnail JPEG, creating directories as needed, and
 // sets the file's access/modification times to `media_time` (Unix seconds) so
 // the thumbnail's date reflects the capture. A media_time <= 0 leaves the
 // default timestamp.
-bool write_thumbnail(const std::string &camera_id, std::int64_t dir,
-                     std::int64_t num, const std::uint8_t *jpeg,
-                     std::size_t size, std::int64_t media_time);
+bool write_thumbnail(const std::string &camera_id, std::int64_t media_id,
+                     const std::uint8_t *jpeg, std::size_t size,
+                     std::int64_t media_time);
 
 // Creates <camera-id>/<name> for writing (replacing an existing file) and
 // returns it, or nullptr on error. For diagnostics.
@@ -85,7 +88,7 @@ bool append_line(const std::string &camera_id, const char *name,
                  const char *header, const std::string &line);
 
 // Writes one downloaded media file. The bytes go to a ".part" file in
-// <camera-id>/media/; finish() renames it to <dir>_<num>.<extension>, so an
+// <camera-id>/media/; finish() renames it to <mediaId>.<extension>, so an
 // interrupted download never looks like a complete file. Without a given
 // extension it is detected from the content.
 class MediaFileWriter
@@ -102,7 +105,7 @@ class MediaFileWriter
     // Without `buffered` the file has no stdio buffer (8 KB of internal RAM
     // each); for writes of several KB from internal RAM, as the SD writer
     // makes them.
-    bool open(const std::string &camera_id, std::int64_t dir, std::int64_t num,
+    bool open(const std::string &camera_id, std::int64_t media_id,
               const char *extension = nullptr, bool buffered = true);
     bool write(const std::uint8_t *data, std::size_t size);
     // Closes the file, gives it its final name and dates it by `media_time`
@@ -139,9 +142,8 @@ class MediaFileWriter
     std::uint64_t size_ = 0;
 };
 
-// Path of the stored thumbnail for (dir, num); the file may not exist.
-std::string thumbnail_path(const std::string &camera_id, std::int64_t dir,
-                           std::int64_t num);
+// Path of a recording's stored thumbnail; the file may not exist.
+std::string thumbnail_path(const std::string &camera_id, std::int64_t media_id);
 
 // Stores the camera's device info next to its catalog, at
 // /sdcard/<camera-id>/camera.json, together with the time it was read

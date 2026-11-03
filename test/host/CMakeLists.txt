@@ -52,6 +52,7 @@ add_executable(host_tests
     test_bulk_stream.cpp
     test_device_info.cpp
     test_media_catalog.cpp
+    test_media_files.cpp
     test_media_store.cpp
     test_mp4_mux.cpp
     test_time_policy.cpp
@@ -90,6 +91,7 @@ add_executable(host_tests
     ${link_dir}/playback_stream.cpp
     ${link_dir}/device_info.cpp
     ${link_dir}/media_catalog.cpp
+    ${link_dir}/media_files.cpp
     ${link_dir}/camera_prelogin.cpp
     ${link_dir}/camera_udp_packets.cpp
     ${link_dir}/pppp_session.cpp

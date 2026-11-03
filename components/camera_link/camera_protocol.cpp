@@ -689,12 +689,11 @@ static void trace(char kind, uint16_t seq, int16_t value, uint8_t flag)
     }
 }
 
-// Writes the trace to <camera>/trace_<dir>_<num>.csv.
+// Writes the trace to <camera>/trace_<mediaId>.csv.
 static void trace_write(const camera::artemis::CatalogEntry &e)
 {
     char name[48];
-    snprintf(name, sizeof(name), "trace_%lld_%lld.csv", (long long)e.dir_num,
-             (long long)e.media_num);
+    snprintf(name, sizeof(name), "trace_%lld.csv", (long long)e.media_id);
     FILE *file = camera::store::create_camera_file(s_camera_id, name);
     if (s_trace == nullptr || file == nullptr) {
         if (file != nullptr) {
@@ -840,10 +839,8 @@ static bool start_video_download(const camera::artemis::CatalogEntry &e)
     s_video = s_pending_video.active && s_pending_video.files == s_video_files
                   ? &s_video_files[1]
                   : &s_video_files[0];
-    if (!s_video->video.open(s_camera_id, e.dir_num, e.media_num, "h264",
-                             buffered) ||
-        !s_video->audio.open(s_camera_id, e.dir_num, e.media_num, "aac",
-                             buffered)) {
+    if (!s_video->video.open(s_camera_id, e.media_id, "h264", buffered) ||
+        !s_video->audio.open(s_camera_id, e.media_id, "aac", buffered)) {
         s_video->video.abort();
         s_video->audio.abort();
         return false;
@@ -934,7 +931,7 @@ static void request_current_download()
             s_download_index = s_download_queue.size();
             break;
         }
-        if (!s_media_file.open(s_camera_id, e.dir_num, e.media_num, nullptr,
+        if (!s_media_file.open(s_camera_id, e.media_id, nullptr,
                                !camera::store::sd_writer_active())) {
             ESP_LOGW(TAG, "Cannot write to the SD card; stopping downloads");
             s_download_index = s_download_queue.size();
@@ -1805,9 +1802,9 @@ static void handle_bulk_frame(int socket_fd,
                              (long long)header.media_num,
                              (long long)header.media_id, (long long)media_id);
                 }
-                if (camera::store::write_thumbnail(
-                        s_camera_id, header.dir_num, header.media_num, jpeg,
-                        jpeg_size, entry->media_time)) {
+                if (camera::store::write_thumbnail(s_camera_id, media_id, jpeg,
+                                                   jpeg_size,
+                                                   entry->media_time)) {
                     s_catalog.set_flag(media_id, MediaCatalog::kThumbPresent);
                     camera::store::save_catalog(s_camera_id, s_catalog);
                 } else {
