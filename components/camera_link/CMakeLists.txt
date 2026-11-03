@@ -13,6 +13,7 @@ idf_component_register(SRCS "camera_protocol.cpp" "camera_prelogin.cpp"
                             "playback_decoder.cpp" "playback_record.cpp"
                             "playback_stream.cpp" "sd_writer.cpp"
                             "task_load.cpp" "video_stats.cpp"
+                            "playback_download.cpp" "playback_policy.cpp"
                        # "." exposes the pure protocol/catalog headers to the
                        # uplink component.
                        INCLUDE_DIRS "include" "."
