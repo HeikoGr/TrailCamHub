@@ -68,7 +68,7 @@ bool parse_media_record(const std::uint8_t *payload, std::size_t payload_size,
         return false;
     out.dir_num = read_u16_le(payload + 0x20);
     out.media_num = read_u16_le(payload + 0x22);
-    out.media_id = read_u32_le(payload + 0x30);
+    out.media_id = read_u32_le(payload + 0x28);
     jpeg_offset = kMediaRecordHeaderSize;
     jpeg_size = payload_size - kMediaRecordHeaderSize;
     return true;

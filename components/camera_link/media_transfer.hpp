@@ -41,13 +41,24 @@ std::string build_download_request(const MediaItem &item, std::int64_t token);
 // A reassembled bulk record carries the same 20-byte ARTEMIS header as the
 // control plane, but its payload is binary: a fixed 72-byte media header
 // followed by the raw JPEG bytes.
+//
+// Header layout of a thumbnail (subtype 0x04), from a dump of a TC100 with
+// firmware 2.2.5.9 (#105); all values little-endian:
+//   0x00  17  MAC address as ASCII ("F4:C1:56:06:ED:3B")
+//   0x20   2  dir
+//   0x22   2  num
+//   0x24   4  length of the data after the header
+//   0x28   4  mediaId (as in the media list)
+//   0x2C      zero up to the end of the header
+// The layout of a full-file download (subtype 0x03) is not checked yet; the
+// runtime uses only dir/num of it.
 
 constexpr std::size_t kMediaRecordHeaderSize = 72;
 
 struct MediaRecordHeader {
     std::int64_t dir_num = 0;    // payload[0x20:0x22], little-endian
     std::int64_t media_num = 0;  // payload[0x22:0x24], little-endian
-    std::int64_t media_id = 0;   // payload[0x30:0x34], little-endian
+    std::int64_t media_id = 0;   // payload[0x28:0x2C], little-endian; 0 = none
 };
 
 // Parses the media header at the front of a bulk record payload and locates
