@@ -64,6 +64,8 @@ int main(int argc, char **argv)
         {"retry", ui::make_screen(ui::Phase::retry_wait, "", 12)},
         {"finished", ui::make_screen(ui::Phase::finished, "TrailCam_DA63", 0,
                                      {3, 3, 3}, kWeb)},
+        {"listed", ui::make_screen(ui::Phase::listed, "TrailCam_DA63", 0,
+                                   {0, 0, 56}, kWeb)},
         {"partial", ui::make_screen(ui::Phase::partial, "TrailCam_DA63", 0,
                                     {3, 1, 3}, kWeb)},
         {"not-found",

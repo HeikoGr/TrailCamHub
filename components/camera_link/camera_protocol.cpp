@@ -151,7 +151,9 @@ static std::atomic<uint32_t> s_stored_items;
 static std::atomic<bool> s_list_only;
 static camera_protocol_list_cb_t s_list_callback;
 static int64_t s_list_page;
-static uint32_t s_list_files;
+static std::atomic<uint32_t> s_list_files;
+// The listing ended with "list failed ...".
+static bool s_list_failed;
 // Scan: the media-list page being read (merged page by page into s_catalog)
 // and the items of the pages read so far.
 static int64_t s_scan_page;
@@ -870,12 +872,19 @@ static void finish_list(const std::string &line)
     s_end_session = true;
 }
 
+// Ends a listing that failed.
+static void fail_list(const std::string &reason)
+{
+    s_list_failed = true;
+    finish_list("list failed " + reason);
+}
+
 static void request_list_page()
 {
     const std::string fields =
         camera::artemis::media_list_request_fields(s_list_page);
     if (!send_artemis_command(768, fields.c_str(), "ARTEMIS GetMediaList")) {
-        finish_list("list failed could not send the request");
+        fail_list("could not send the request");
     }
 }
 
@@ -883,15 +892,20 @@ static void handle_list_page(const std::string &json)
 {
     camera::artemis::MediaList list;
     const bool parsed = camera::artemis::parse_media_list(json, list);
-    if (!parsed || camera::artemis::media_list_failed(list)) {
-        finish_list("list failed getMediaListRet=" +
-                    std::to_string(list.list_ret));
+    if (camera::artemis::media_list_failed(list)) {
+        // Also without a mediaFiles array: the camera named the error.
+        s_media_list_error = true;
+        fail_list("getMediaListRet=" + std::to_string(list.list_ret) +
+                  (list.error_msg.empty() ? "" : " " + list.error_msg));
+        return;
+    }
+    if (!parsed) {
+        fail_list("no mediaFiles array");
         return;
     }
     if (list.page_no != s_list_page) {
-        finish_list("list failed asked for page " +
-                    std::to_string(s_list_page) + ", got " +
-                    std::to_string(list.page_no));
+        fail_list("asked for page " + std::to_string(s_list_page) + ", got " +
+                  std::to_string(list.page_no));
         return;
     }
     for (const camera::artemis::MediaItem &item : list.files) {
@@ -899,7 +913,7 @@ static void handle_list_page(const std::string &json)
         ++s_list_files;
     }
     ++s_list_page;
-    const std::string counts = " files=" + std::to_string(s_list_files) +
+    const std::string counts = " files=" + std::to_string(s_list_files.load()) +
                                " pages=" + std::to_string(s_list_page);
     if (!camera::artemis::media_list_has_more(list)) {
         finish_list("list done" + counts);
@@ -1196,10 +1210,11 @@ static esp_err_t run_artemis_session(int socket_fd,
             ESP_LOGI(TAG, "%s; closed the camera session",
                      s_work_done ? "Work complete" : "Nothing more to do");
             // A listing ends this way when it is done. A scan that could not
-            // do its work (e.g. no SD card in the camera) did not read the
-            // camera.
-            return s_work_done || s_list_only.load() ? ESP_OK
-                                                     : ESP_ERR_INVALID_RESPONSE;
+            // do its work (e.g. no SD card in the camera), or a listing that
+            // failed, did not read the camera.
+            const bool ok =
+                s_work_done || (s_list_only.load() && !s_list_failed);
+            return ok ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
         }
         int64_t now_us = esp_timer_get_time();
         // A request the camera never answers (or an answer we do not
@@ -1429,6 +1444,8 @@ esp_err_t camera_protocol_run(const esp_ip4_addr_t *gateway)
     camera::link::clear_stop();
     s_media_list_error = false;
     s_stored_items = 0;
+    s_list_files = 0;
+    s_list_failed = false;
     s_work_done = false;
     camera::store::sd_writer_begin_session();
     const esp_err_t error = connect_and_run_session(*gateway);
@@ -1461,6 +1478,11 @@ bool camera_protocol_media_list_error(void)
 uint32_t camera_protocol_stored_items(void)
 {
     return s_stored_items;
+}
+
+uint32_t camera_protocol_listed_files(void)
+{
+    return s_list_files;
 }
 
 int camera_protocol_last_battery_percent(void)

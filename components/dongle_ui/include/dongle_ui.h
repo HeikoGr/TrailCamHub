@@ -18,6 +18,8 @@ typedef enum {
     DONGLE_UI_RETRY_WAIT,
     /* Idle after a session that did all its work. */
     DONGLE_UI_FINISHED,
+    /* Idle after a listing; the media total is the number of files. */
+    DONGLE_UI_LISTED,
     /* Idle after a session that stored some media and then failed. */
     DONGLE_UI_PARTIAL,
     /* Idle after a cycle that failed or was stopped, until the next search. */

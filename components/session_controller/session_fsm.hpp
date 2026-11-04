@@ -71,6 +71,7 @@ enum Action : std::uint32_t {
 enum class Outcome : std::uint8_t {
     none,                // the cycle is still running (or nothing happened)
     camera_scanned,      // camera session done, no uplink configured
+    camera_listed,       // listing of the camera's media done (no sync)
     uplink_done,         // camera session (if any) and uplink done
     camera_unreachable,  // all camera attempts failed
     camera_no_card,      // the camera has no SD card (media list error)
@@ -88,6 +89,7 @@ enum class FrontEndPhase : std::uint8_t {
     retry_wait,  // waiting for the next camera attempt
     uploading,   // home Wi-Fi and backend sync
     finished,    // idle after a successful cycle
+    listed,      // idle after a successful listing
     // Idle after a cycle whose camera session ended with an error after
     // storing some media (the sync still ran, if configured).
     partial,
@@ -145,6 +147,10 @@ class Fsm
     void set_uplink_enabled(bool enabled);
     bool uplink_enabled() const;
 
+    // Whether a scan only lists the camera's media: it ends after the camera
+    // session with camera_listed and never syncs. Read when a cycle starts.
+    void set_listing(bool listing);
+
     // Camera attempt within the current cycle (1-based; 0 when idle).
     std::uint32_t attempt() const;
 
@@ -168,6 +174,7 @@ class Fsm
     Config config_;
     State state_{State::idle};
     bool uplink_enabled_{false};
+    bool listing_{false};
     std::uint32_t attempt_{0};
     bool stop_pending_{false};
     bool partial_{false};

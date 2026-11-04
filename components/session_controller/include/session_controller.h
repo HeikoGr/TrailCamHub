@@ -34,6 +34,8 @@ typedef enum {
     SESSION_RESULT_NONE,
     /* Camera session done; no uplink configured. */
     SESSION_RESULT_CAMERA_SCANNED,
+    /* Listing of the camera's media done (list_only); never synced. */
+    SESSION_RESULT_CAMERA_LISTED,
     /* Camera session (unless upload only) and backend sync done. */
     SESSION_RESULT_UPLINK_DONE,
     SESSION_RESULT_CAMERA_UNREACHABLE,
@@ -58,6 +60,8 @@ typedef enum {
     SESSION_FRONT_END_UPLOADING,
     /* Idle after a cycle with the result CAMERA_SCANNED or UPLINK_DONE. */
     SESSION_FRONT_END_FINISHED,
+    /* Idle after a listing (CAMERA_LISTED); see listed_files. */
+    SESSION_FRONT_END_LISTED,
     /* The same, but the camera session ended with an error after storing
      * some media (camera_partial). */
     SESSION_FRONT_END_PARTIAL,
@@ -101,6 +105,8 @@ typedef struct {
      * cleared when the next cycle starts.
      */
     bool list_only;
+    /* Files reported by the listing of this cycle; kept like list_only. */
+    uint32_t listed_files;
     /* True only on the update that ends a cycle. */
     bool cycle_finished;
     /* Result of the last finished cycle; NONE while a new one runs. */
@@ -111,7 +117,7 @@ typedef struct {
     /*
      * Stable name of front_end_phase for the console and the web UI JSON:
      * "idle", "searching", "connecting", "connected", "retry_wait",
-     * "uploading", "finished", "partial", "not_found", "no_card",
+     * "uploading", "finished", "listed", "partial", "not_found", "no_card",
      * "upload_failed" or "stopped".
      */
     const char *front_end_phase_name;

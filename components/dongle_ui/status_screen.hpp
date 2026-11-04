@@ -17,6 +17,9 @@ enum class Phase : std::uint8_t {
     retry_wait,
     // Idle after a session that did all its work.
     finished,
+    // Idle after a listing of the camera's media; MediaProgress::total is the
+    // number of files on the camera.
+    listed,
     // Idle after a session that stored some media and then failed.
     partial,
     // Idle after a cycle that did not succeed, until the next search.

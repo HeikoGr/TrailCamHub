@@ -827,7 +827,7 @@ bool session_active()
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool active = true;
     for (const char *idle :
-         {"idle", "finished", "partial", "not_found", "no_card",
+         {"idle", "finished", "listed", "partial", "not_found", "no_card",
           "upload_failed", "stopped"}) {
         if (strcmp(s_phase, idle) == 0) {
             active = false;

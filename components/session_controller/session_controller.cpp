@@ -59,6 +59,8 @@ struct QueuedEvent {
     std::uint8_t reason;
     // With scan_requested: only list the camera's media.
     bool list_only;
+    // With the end of a listing's session: the files it reported.
+    std::uint32_t listed_files;
     char ssid[MAX_SSID_LEN + 1];
     char password[MAX_PASSWORD_LEN + 1];
 };
@@ -92,6 +94,8 @@ hub_config::Settings s_settings;
 // touched by the controller task.
 bool s_camera_ok;
 bool s_list_only;
+// Files reported by the listing of this cycle.
+uint32_t s_listed_files;
 bool s_sync_ok;
 
 // Published status; written by the controller task, read by any task.
@@ -174,6 +178,8 @@ session_result_t result_of(session::Outcome outcome)
         return SESSION_RESULT_NONE;
     case session::Outcome::camera_scanned:
         return SESSION_RESULT_CAMERA_SCANNED;
+    case session::Outcome::camera_listed:
+        return SESSION_RESULT_CAMERA_LISTED;
     case session::Outcome::uplink_done:
         return SESSION_RESULT_UPLINK_DONE;
     case session::Outcome::camera_unreachable:
@@ -205,6 +211,8 @@ session_front_end_phase_t front_end_of(session::FrontEndPhase phase)
         return SESSION_FRONT_END_UPLOADING;
     case session::FrontEndPhase::finished:
         return SESSION_FRONT_END_FINISHED;
+    case session::FrontEndPhase::listed:
+        return SESSION_FRONT_END_LISTED;
     case session::FrontEndPhase::partial:
         return SESSION_FRONT_END_PARTIAL;
     case session::FrontEndPhase::not_found:
@@ -253,6 +261,7 @@ void publish_status(const session::Result &result)
     }
     s_status.camera_ok = s_camera_ok;
     s_status.camera_partial = s_fsm.partial();
+    s_status.listed_files = s_listed_files;
     s_status.list_only = s_list_only;
     s_status.sync_ok = s_sync_ok;
     if (s_status.cycle_finished) {
@@ -339,6 +348,7 @@ void session_task(void *arg)
         QueuedEvent event = make_event(session::session_end_event(
             error == ESP_OK, camera_protocol_media_list_error(), stored));
         event.error = error;
+        event.listed_files = camera_protocol_listed_files();
         ESP_LOGI(TAG, "Camera session ended: %s, %u item(s) stored (%s)",
                  esp_err_to_name(error), (unsigned)stored,
                  session::to_string(event.type));
@@ -460,6 +470,7 @@ void load_settings_for_cycle()
     }
     s_fsm.set_uplink_enabled(hub_config::uplink_configured(s_settings) &&
                              !s_list_only);
+    s_fsm.set_listing(s_list_only);
 }
 
 void controller_task(void *arg)
@@ -485,6 +496,7 @@ void controller_task(void *arg)
                               event.type == session::Event::upload_requested)) {
             s_camera_ok = false;
             s_sync_ok = false;
+            s_listed_files = 0;
             s_list_only = event.list_only;
             camera_protocol_set_list_only(s_list_only);
         }
@@ -494,6 +506,7 @@ void controller_task(void *arg)
             // again.
             s_camera_ok = event.type == session::Event::session_ended ||
                           event.type == session::Event::session_partial;
+            s_listed_files = event.listed_files;
         }
         if (event.type == session::Event::uplink_done &&
             s_fsm.state() == session::State::uplink) {

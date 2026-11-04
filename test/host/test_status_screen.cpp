@@ -144,10 +144,10 @@ TEST_CASE("finished screen shows the result and the web UI")
 
 TEST_CASE("all lines fit the screen")
 {
-    for (Phase phase :
-         {Phase::idle, Phase::searching, Phase::connecting, Phase::connected,
-          Phase::retry_wait, Phase::finished, Phase::partial, Phase::not_found,
-          Phase::no_card, Phase::upload_failed, Phase::stopped}) {
+    for (Phase phase : {Phase::idle, Phase::searching, Phase::connecting,
+                        Phase::connected, Phase::retry_wait, Phase::finished,
+                        Phase::listed, Phase::partial, Phase::not_found,
+                        Phase::no_card, Phase::upload_failed, Phase::stopped}) {
         const Screen screen =
             ui::make_screen(phase, "", 4294967u, {99998, 99998, 99999},
                             {"TrailCamHub-ABCDEFGHIJKLMNOPQRSTUVWXYZ",
@@ -169,4 +169,16 @@ TEST_CASE("a session that ended early is not shown as finished")
 
     const Screen thumbnails_only = ui::make_screen(Phase::partial, "", 0);
     CHECK(std::string(thumbnails_only.line1) == "Session ended early");
+}
+
+TEST_CASE("a listing shows how many files are on the camera, not a sync")
+{
+    const Screen listed = ui::make_screen(Phase::listed, "", 0, {0, 0, 56});
+    CHECK(std::string(listed.title) == "LISTED");
+    CHECK(listed.tone == Tone::ok);
+    CHECK(std::string(listed.line1) == "56 files on the camera");
+    CHECK(std::string(ui::make_screen(Phase::listed, "", 0, {0, 0, 1}).line1) ==
+          "1 file on the camera");
+    CHECK(std::string(ui::make_screen(Phase::listed, "", 0).line1) ==
+          "0 files on the camera");
 }
