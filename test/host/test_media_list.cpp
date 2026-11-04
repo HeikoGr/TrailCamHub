@@ -137,3 +137,34 @@ TEST_CASE("media_list_failed flags an error even with a mediaFiles array")
         list));
     CHECK(media_list_failed(list));
 }
+
+TEST_CASE("media_list_request_fields names the page")
+{
+    CHECK(media_list_request_fields(0) ==
+          ",\"itemCntPerPage\":45,\"pageNo\":0");
+    CHECK(media_list_request_fields(3) ==
+          ",\"itemCntPerPage\":45,\"pageNo\":3");
+}
+
+TEST_CASE("media_list_has_more: only a full page can have a successor")
+{
+    MediaList list;
+    CHECK_FALSE(media_list_has_more(list));  // past the end: empty
+    list.files.resize(kMediaListPageSize - 1);
+    CHECK_FALSE(media_list_has_more(list));
+    // With exactly a page of files the next page is empty, and ends the list.
+    list.files.resize(kMediaListPageSize);
+    CHECK(media_list_has_more(list));
+}
+
+TEST_CASE("format_media_item shows the wall clock unchanged")
+{
+    MediaItem item;
+    item.file_type = 2;
+    item.dir_num = 100;
+    item.num = 56;
+    item.id = 4136037234;  // does not fit a signed 32-bit integer
+    item.time = 1793740288;
+    CHECK(format_media_item(item) ==
+          "type=2 dir=100 num=56 id=4136037234 time=2026-11-03T21:11:28");
+}

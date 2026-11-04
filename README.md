@@ -109,7 +109,7 @@ The firmware is split into ESP-IDF components with explicit dependencies:
 | `components/schedule`, `schedule_state`, `scheduler` | Wake-up schedule: camera read plan and check-in times (pure logic, host-tested), state across deep sleep and settings from the backend, the task that requests the cycles and sleeps in between |
 | `components/session_controller` | Session state machine and the tasks that drive a scan: camera session, then backend uplink; request and status interface for front ends |
 | `components/hub_config` | Hub settings in NVS (home Wi-Fi, backend URL, device key) with validation |
-| `components/hub_console` | Line-based serial commands (`scan`, `upload`, `stop`, `config …`) used by the web installer |
+| `components/hub_console` | Line-based serial commands (`scan`, `camlist`, `upload`, `stop`, `config …`) used by the web installer |
 | `components/uplink` | HTTPS sync with the backend: check-in, thumbnail upload, acknowledgement |
 
 Components do not call each other directly. They report events through callbacks to the session controller, which runs them in one task:
@@ -150,6 +150,7 @@ The console UART accepts one command per line; replies and progress are lines st
 |---|---|
 | `status` | Current state, settings (secrets hidden) and schedule (next camera read and check-in) |
 | `scan` | Read the camera, then sync with the backend if configured |
+| `camlist` | List all media on the camera, one `TCH EVENT media type=… dir=… num=… id=… time=…` line per file, ending with `TCH EVENT list done files=… pages=…`. Wakes the camera but fetches and syncs nothing, leaves the catalog alone and does not count as a read for the schedule |
 | `upload` | Sync the data already on the SD card with the backend |
 | `stop` | End the running scan; a running backend sync finishes |
 | `config show` | List settings |

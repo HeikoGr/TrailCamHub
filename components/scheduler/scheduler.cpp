@@ -63,6 +63,13 @@ bool camera_phase(session_phase_t phase)
 void on_status(const session_status_t *status, void *context)
 {
     (void)context;
+    // A listing fetches nothing: it is no read of the camera, so it neither
+    // moves the next read nor answers a read that the backend asked for.
+    if (status->list_only) {
+        s_last_phase = status->phase;
+        wake_task();
+        return;
+    }
     if (s_last_phase == SESSION_PHASE_IDLE &&
         status->phase != SESSION_PHASE_IDLE) {
         schedule::on_cycle_started(camera_phase(status->phase));

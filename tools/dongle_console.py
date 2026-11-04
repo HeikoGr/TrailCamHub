@@ -8,6 +8,7 @@ need CONFIG_HUB_CONSOLE_DIAGNOSTICS.
 
   dongle_console.py run status
   dongle_console.py run scan --follow 300 --until "TCH EVENT done"
+  dongle_console.py run camlist --follow 120 --until "TCH EVENT done"
   dongle_console.py run rm -r /sdcard/<camera>
   dongle_console.py get logs/log-00003.txt ./log-00003.txt
   dongle_console.py get-tree <camera> ./sdcard-copy

@@ -141,6 +141,12 @@ static bool s_work_done;
 // The session cannot do its work (e.g. the camera has no SD card): close it
 // like a finished one, but do not count it as synced.
 static bool s_end_session;
+// Listing only (camera_protocol_set_list_only()): the page being read and the
+// files reported so far.
+static std::atomic<bool> s_list_only;
+static camera_protocol_list_cb_t s_list_callback;
+static int64_t s_list_page;
+static uint32_t s_list_files;
 // Last time the camera answered a request or sent bulk data. Heartbeats do
 // not count: the camera answers them even when nothing else happens.
 static int64_t s_last_progress_us;
@@ -834,6 +840,62 @@ static void handle_bulk_frame(int socket_fd,
     }
 }
 
+// --- Listing only ---
+
+static void report_list_line(const std::string &line)
+{
+    if (s_list_callback != nullptr) {
+        s_list_callback(line.c_str());
+    }
+}
+
+// Ends a listing with its final line.
+static void finish_list(const std::string &line)
+{
+    report_list_line(line);
+    s_end_session = true;
+}
+
+static void request_list_page()
+{
+    const std::string fields =
+        camera::artemis::media_list_request_fields(s_list_page);
+    if (!send_artemis_command(768, fields.c_str(), "ARTEMIS GetMediaList")) {
+        finish_list("list failed could not send the request");
+    }
+}
+
+static void handle_list_page(const std::string &json)
+{
+    camera::artemis::MediaList list;
+    const bool parsed = camera::artemis::parse_media_list(json, list);
+    if (!parsed || camera::artemis::media_list_failed(list)) {
+        finish_list("list failed getMediaListRet=" +
+                    std::to_string(list.list_ret));
+        return;
+    }
+    if (list.page_no != s_list_page) {
+        finish_list("list failed asked for page " +
+                    std::to_string(s_list_page) + ", got " +
+                    std::to_string(list.page_no));
+        return;
+    }
+    for (const camera::artemis::MediaItem &item : list.files) {
+        report_list_line("media " + camera::artemis::format_media_item(item));
+        ++s_list_files;
+    }
+    ++s_list_page;
+    const std::string counts = " files=" + std::to_string(s_list_files) +
+                               " pages=" + std::to_string(s_list_page);
+    if (!camera::artemis::media_list_has_more(list)) {
+        finish_list("list done" + counts);
+    } else if (s_list_page >= camera::artemis::kMediaListMaxPages) {
+        finish_list("list truncated" + counts);
+    } else {
+        request_list_page();
+    }
+}
+
 // Decrypts a received ARTEMIS DATA message (reassembling fragments). On the
 // login response it records the session token; the first command is sent only
 // once the session has settled (see the heartbeat-ack path), mirroring the
@@ -914,6 +976,10 @@ static void process_artemis_response(const SessionEvent &event)
 
     // Parse the media list into the typed model and log a short summary, so
     // the model is exercised against the real response on hardware too.
+    if (cmd_id == 768 && s_list_only.load()) {
+        handle_list_page(message.json);
+        return;
+    }
     if (cmd_id == 768) {
         camera::artemis::MediaList list;
         const bool parsed =
@@ -991,14 +1057,21 @@ static void process_artemis_response(const SessionEvent &event)
             ESP_LOGW(TAG, "Could not parse device info; using camera id '%s'",
                      s_camera_id.c_str());
         }
+        s_media_requested = true;
+        if (s_list_only.load()) {
+            s_list_page = 0;
+            s_list_files = 0;
+            request_list_page();
+            return;
+        }
         s_catalog.clear();
         camera::store::load_catalog(s_camera_id, s_catalog);
         ESP_LOGI(TAG, "Loaded catalog: %u known items",
                  (unsigned)s_catalog.size());
 
-        s_media_requested = true;
-        send_artemis_command(768, ",\"itemCntPerPage\":45,\"pageNo\":0",
-                             "ARTEMIS GetMediaList");
+        send_artemis_command(
+            768, camera::artemis::media_list_request_fields(0).c_str(),
+            "ARTEMIS GetMediaList");
     }
 }
 
@@ -1311,6 +1384,16 @@ int camera_protocol_last_battery_percent(void)
 void camera_protocol_init_storage(void)
 {
     camera::store::sd_writer_start();
+}
+
+void camera_protocol_set_list_only(bool list_only)
+{
+    s_list_only = list_only;
+}
+
+void camera_protocol_set_list_callback(camera_protocol_list_cb_t cb)
+{
+    s_list_callback = cb;
 }
 
 void camera_protocol_set_progress_callback(camera_protocol_progress_cb_t cb)

@@ -149,6 +149,13 @@ TEST_CASE("uplink needs all settings")
     CHECK(hub_config::api_base(settings.api_url) == "https://api.example.com");
 }
 
+TEST_CASE("camlist takes no arguments")
+{
+    CHECK(parse_command("camlist").type == CommandType::camlist);
+    CHECK(parse_command("tch camlist\n").type == CommandType::camlist);
+    CHECK(parse_command("camlist all").type == CommandType::invalid);
+}
+
 TEST_CASE("stop and the diagnostic commands")
 {
     CHECK(parse_command("stop").type == CommandType::stop);

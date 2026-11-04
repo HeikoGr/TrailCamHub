@@ -241,6 +241,7 @@ extern "C" void app_main(void)
     }
 #endif
     camera_protocol_set_progress_callback(on_media_progress);
+    camera_protocol_set_list_callback(hub_console_list_event);
     error = session_controller_start();
     if (error != ESP_OK) {
         ESP_LOGE(TAG, "Could not start the session controller: %s",

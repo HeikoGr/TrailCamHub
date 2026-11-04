@@ -242,6 +242,9 @@ Command parse_command(const std::string &line)
     if (word == "scan") {
         return simple(CommandType::scan);
     }
+    if (word == "camlist") {
+        return simple(CommandType::camlist);
+    }
     if (word == "upload") {
         return simple(CommandType::upload);
     }
@@ -256,6 +259,7 @@ const char *help_text()
     return "status                     show state and settings\n"
            "scan                       read the camera, then sync with the "
            "backend\n"
+           "camlist                    list the media on the camera\n"
            "upload                     sync stored data with the backend "
            "only\n"
            "stop                       end the running scan\n"
