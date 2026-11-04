@@ -23,7 +23,6 @@ struct VideoTransferStats {
     std::uint32_t frames = 0;
     std::uint32_t audio_frames = 0;
     std::uint32_t markers = 0;
-    std::uint32_t foreign_records = 0;
     std::uint32_t other_records = 0;
     // Bytes of video and audio data received (written, or discarded in the
     // throughput test), and of each stream.
