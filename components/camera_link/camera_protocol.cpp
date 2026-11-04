@@ -52,6 +52,7 @@
 #include "pppp_session.hpp"
 #include "sd_writer.hpp"
 #include "task_load.hpp"
+#include "video_stats.hpp"
 #include "sdkconfig.h"
 
 #define CAMERA_RUDP_RECEIVE_TIMEOUT_MS 500
@@ -218,57 +219,8 @@ static int64_t s_video_total_frames;
 static int64_t s_video_last_data_us;
 static int64_t s_video_drain_until_us;
 static bool s_video_write_failed;
-static uint32_t s_video_ack_failures;
-static uint32_t s_video_heartbeats;
-// Frames far from the expected sequence (more than the reorder window ahead or
-// behind) and how many of them were logged.
-static uint32_t s_video_far_behind;
-static uint32_t s_video_far_logged;
-// Gaps in the playback stream: how many opened, and how long they stayed
-// open until the camera sent the missing frame again.
-static uint32_t s_video_gaps;
-static int64_t s_video_gap_started_us;
-static int64_t s_video_gap_total_us;
-static int64_t s_video_gap_max_us;
-// Sequence missing in the open gap, and how many gaps and repeated frames
-// were logged one by one.
-static uint16_t s_video_gap_seq;
-static uint16_t s_video_gap_missing;
-static uint32_t s_video_gap_logged;
-static uint32_t s_video_repeat_logged;
-// Repeated frames that arrived while no gap was open: the camera sent again
-// a frame that had been acknowledged.
-static uint32_t s_video_repeats_without_gap;
-// Frames missing when a gap opened, in total and by size of the loss: one
-// frame, 2-4, 5-16, more. Single frames point to losses on the air, long runs
-// to full receive buffers.
-static uint32_t s_video_missing;
-static uint32_t s_video_missing_runs[4];
-// Time the session task spent between two receive calls (when it did not
-// take frames from the socket): longest, and how often over 10 and 50 ms.
-static int64_t s_video_loop_max_us;
-static uint32_t s_video_loop_over_10ms;
-static uint32_t s_video_loop_over_50ms;
-// Signal strength of the camera's access point during the video.
-static int s_video_rssi_min;
-static int s_video_rssi_last;
-// Frames on other bulk subtypes during a video (leftovers of thumbnails).
-static uint32_t s_video_other_subtype_frames;
-// Time the session waited for SD writes (only while the writer's buffer
-// was full), and the time the SD writer spent writing.
-static int64_t s_video_write_us;
-static int64_t s_video_write_max_us;
-static int64_t s_video_card_us;
-static int64_t s_video_card_max_us;
-// Bytes of video and audio data received (written, or discarded in the
-// throughput test).
-static uint64_t s_video_bytes;
-static bool s_video_complete_logged;
-static uint32_t s_video_frames;
-static uint32_t s_video_audio_frames;
-static uint32_t s_video_markers;
-static uint32_t s_video_foreign_records;
-static uint32_t s_video_other_records;
+// Figures of the video being downloaded (video_stats.hpp).
+static camera::artemis::VideoTransferStats s_video_stats;
 static camera::artemis::PlaybackStream
     s_playback(CAMERA_DOWNLOAD_REORDER_FRAMES, CAMERA_VIDEO_MAX_RECORD);
 static bool accept_video_frame(const camera::artemis::PlaybackFrame &frame);
@@ -291,8 +243,6 @@ struct VideoFiles {
 };
 static VideoFiles s_video_files[2];
 static VideoFiles *s_video = &s_video_files[0];
-static uint64_t s_video_media_bytes;
-static uint64_t s_video_audio_bytes;
 // A downloaded video whose files are closed, and which is marked as stored in
 // the catalog, once the SD writer has written it (sd_writer_end_files()).
 struct PendingVideo {
@@ -445,7 +395,7 @@ static void send_bulk_ack(int socket_fd,
     s_bulk_ack_pending = 0;
     if (built && send_udp_request(socket_fd, camera_address, "BULK ACK", ack) !=
                      ESP_OK) {
-        s_video_ack_failures++;
+        s_video_stats.ack_failures++;
     }
 }
 
@@ -547,32 +497,13 @@ static bool start_video_download(const camera::artemis::CatalogEntry &e)
         s_video->audio.abort();
         return false;
     }
-    s_video_media_bytes = 0;
-    s_video_audio_bytes = 0;
+    s_video_stats.reset();
     s_video_session_no = 1 + esp_random() % 0xfffe;
     s_video_file_type = e.file_type;
     s_video_retried = false;
     s_video_total_frames = 0;
     s_video_last_data_us = 0;
     s_video_write_failed = false;
-    s_video_ack_failures = 0;
-    s_video_heartbeats = 0;
-    s_video_far_behind = 0;
-    s_video_far_logged = 0;
-    s_video_gaps = 0;
-    s_video_gap_total_us = 0;
-    s_video_gap_max_us = 0;
-    s_video_gap_logged = 0;
-    s_video_repeat_logged = 0;
-    s_video_repeats_without_gap = 0;
-    s_video_other_subtype_frames = 0;
-    s_video_missing = 0;
-    memset(s_video_missing_runs, 0, sizeof(s_video_missing_runs));
-    s_video_loop_max_us = 0;
-    s_video_loop_over_10ms = 0;
-    s_video_loop_over_50ms = 0;
-    s_video_rssi_min = 0;
-    s_video_rssi_last = 0;
     camera::diag::task_load_start();
 #if CONFIG_ESP_WIFI_ENABLE_WIFI_RX_STATS
     static bool rx_statistics;
@@ -580,20 +511,10 @@ static bool start_video_download(const camera::artemis::CatalogEntry &e)
         rx_statistics = esp_wifi_enable_rx_statistics(true, false) == ESP_OK;
     }
 #endif
-    s_video_write_us = 0;
-    s_video_write_max_us = 0;
-    s_video_card_us = 0;
-    s_video_card_max_us = 0;
-    camera::store::sd_writer_take_stats(s_video_card_us, s_video_card_max_us);
-    s_video_card_us = 0;
-    s_video_card_max_us = 0;
-    s_video_bytes = 0;
-    s_video_complete_logged = false;
-    s_video_frames = 0;
-    s_video_audio_frames = 0;
-    s_video_markers = 0;
-    s_video_foreign_records = 0;
-    s_video_other_records = 0;
+    // Drop what the SD writer measured before this video.
+    int64_t card_us = 0;
+    int64_t card_max_us = 0;
+    camera::store::sd_writer_take_stats(card_us, card_max_us);
     s_playback.reset();
     s_video_decoder.reset();
     trace_start();
@@ -695,54 +616,49 @@ static void log_video_transfer()
 #if SOC_WIFI_SUPPORTED
     int rssi = 0;
     if (esp_wifi_sta_get_rssi(&rssi) == ESP_OK) {
-        s_video_rssi_last = rssi;
-        if (s_video_rssi_min == 0 || rssi < s_video_rssi_min) {
-            s_video_rssi_min = rssi;
-        }
+        s_video_stats.note_rssi(rssi);
     }
 #endif
     ESP_LOGI(TAG,
              "Video transfer: %u frames missing in gaps (runs of 1: %u, 2-4: "
              "%u, 5-16: %u, more: %u), session loop busy up to %lld ms (%u "
              "times over 10 ms, %u over 50 ms), RSSI %d dBm (min %d)",
-             (unsigned)s_video_missing, (unsigned)s_video_missing_runs[0],
-             (unsigned)s_video_missing_runs[1],
-             (unsigned)s_video_missing_runs[2],
-             (unsigned)s_video_missing_runs[3],
-             (long long)(s_video_loop_max_us / 1000),
-             (unsigned)s_video_loop_over_10ms, (unsigned)s_video_loop_over_50ms,
-             s_video_rssi_last, s_video_rssi_min);
+             (unsigned)s_video_stats.missing,
+             (unsigned)s_video_stats.missing_runs[0],
+             (unsigned)s_video_stats.missing_runs[1],
+             (unsigned)s_video_stats.missing_runs[2],
+             (unsigned)s_video_stats.missing_runs[3],
+             (long long)(s_video_stats.loop_max_us / 1000),
+             (unsigned)s_video_stats.loop_over_10ms,
+             (unsigned)s_video_stats.loop_over_50ms, s_video_stats.rssi_last,
+             s_video_stats.rssi_min);
     // Two lines: the SD log cuts lines at 256 characters.
     ESP_LOGI(TAG,
              "Video transfer: %u frames out of order, %u repeated by the "
              "camera (%u with no gap open), %u beyond the window, %u far "
              "behind, %u gaps (%lld ms on average, longest %lld ms)",
              (unsigned)frames.buffered, (unsigned)frames.duplicates,
-             (unsigned)s_video_repeats_without_gap, (unsigned)frames.ahead,
-             (unsigned)s_video_far_behind, (unsigned)s_video_gaps,
-             (long long)(s_video_gaps > 0
-                             ? s_video_gap_total_us / s_video_gaps / 1000
-                             : 0),
-             (long long)(s_video_gap_max_us / 1000));
+             (unsigned)s_video_stats.repeats_without_gap,
+             (unsigned)frames.ahead, (unsigned)s_video_stats.far_behind,
+             (unsigned)s_video_stats.gaps,
+             (long long)s_video_stats.gap_average_ms(),
+             (long long)(s_video_stats.gap_max_us / 1000));
     int64_t card_us = 0;
     int64_t card_max_us = 0;
     camera::store::sd_writer_take_stats(card_us, card_max_us);
-    s_video_card_us += card_us;
-    if (card_max_us > s_video_card_max_us) {
-        s_video_card_max_us = card_max_us;
-    }
+    s_video_stats.add_card_time(card_us, card_max_us);
     ESP_LOGI(TAG,
              "Video transfer: %u ACK send failures, waited for SD %lld ms "
              "(longest %lld ms), SD card busy %lld ms (longest %lld ms), "
              "internal heap %u B free (min %u B), %u heartbeats",
-             (unsigned)s_video_ack_failures,
-             (long long)(s_video_write_us / 1000),
-             (long long)(s_video_write_max_us / 1000),
-             (long long)(s_video_card_us / 1000),
-             (long long)(s_video_card_max_us / 1000),
+             (unsigned)s_video_stats.ack_failures,
+             (long long)(s_video_stats.write_us / 1000),
+             (long long)(s_video_stats.write_max_us / 1000),
+             (long long)(s_video_stats.card_us / 1000),
+             (long long)(s_video_stats.card_max_us / 1000),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)s_video_heartbeats);
+             (unsigned)s_video_stats.heartbeats);
 }
 
 // Logs the CPU share of the tasks and the Wi-Fi driver's statistics for the
@@ -767,36 +683,20 @@ static void report_video_end(const camera::artemis::CatalogEntry &e,
     const camera::artemis::FrameReorder::Stats &frames =
         s_playback.reorder_stats();
     const esp_app_desc_t *app = esp_app_get_description();
-    char line[320];
-    snprintf(
-        line, sizeof(line),
-        "%s %s %s,%lld,%lld,%d,%u,%llu,%lld,%llu,%u,%u,%u,%u,%u,%u,%u,%"
-        "u,%u,%lld,%lld,%lld,%u,%u,%u,%d,%d,%u,%d",
-        app->version, app->date, app->time, (long long)e.dir_num,
-        (long long)e.media_num, complete ? 1 : 0, (unsigned)s_video_frames,
-        (unsigned long long)s_video_bytes, (long long)elapsed_ms,
-        (unsigned long long)(elapsed_ms > 0 ? s_video_bytes / elapsed_ms : 0),
-        (unsigned)s_video_gaps, (unsigned)s_video_missing,
-        (unsigned)s_video_missing_runs[0], (unsigned)s_video_missing_runs[3],
-        (unsigned)(s_video_gaps > 0 ? s_video_gap_total_us / s_video_gaps / 1000
-                                    : 0),
-        (unsigned)frames.duplicates, (unsigned)s_video_repeats_without_gap,
-        (unsigned)frames.buffered, (unsigned)s_video_ack_failures,
-        (long long)(s_video_write_us / 1000),
-        (long long)(s_video_card_us / 1000),
-        (long long)(s_video_loop_max_us / 1000),
-        (unsigned)s_video_loop_over_10ms, (unsigned)s_video_loop_over_50ms,
-        (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-        s_video_rssi_min, s_video_rssi_last,
-        (unsigned)(kDiscardVideoData ? 1 : 0), idle);
+    camera::artemis::VideoEndInfo info;
+    info.version = app->version;
+    info.date = app->date;
+    info.time = app->time;
+    info.dir_num = e.dir_num;
+    info.media_num = e.media_num;
+    info.complete = complete;
+    info.elapsed_ms = elapsed_ms;
+    info.heap_min = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    info.discard_test = kDiscardVideoData;
+    info.cpu_idle_percent = idle;
     camera::store::append_line(
-        s_camera_id, "video_stats.csv",
-        "firmware,dir,num,complete,video_frames,bytes,ms,kb_per_s,gaps,"
-        "missing,single_losses,runs_over_16,gap_ms_avg,repeats,"
-        "repeats_no_gap,out_of_order,ack_failures,waited_for_sd_ms,"
-        "sd_busy_ms,loop_max_ms,loop_over_10ms,loop_over_50ms,heap_min,"
-        "rssi_min,rssi_last,discard_test,cpu_idle_percent",
-        line);
+        s_camera_id, "video_stats.csv", camera::artemis::kVideoStatsCsvHeader,
+        camera::artemis::video_stats_csv_line(s_video_stats, frames, info));
 }
 
 // Ends the current download: on success the file gets its final name and the
@@ -864,7 +764,7 @@ static void finish_current_download(bool stored, bool stop_all)
     // A video that ended normally is closed once the SD writer has written
     // it, while the next one is downloaded (complete_pending_video()).
     const bool deferred =
-        was_video && stored && !kDiscardVideoData && s_video_frames > 0;
+        was_video && stored && !kDiscardVideoData && s_video_stats.frames > 0;
     // Otherwise wait for the queued writes (or drop them if the file is not
     // kept).
     if (!deferred && !camera::store::sd_writer_flush(!stored) && stored) {
@@ -873,7 +773,7 @@ static void finish_current_download(bool stored, bool stop_all)
     }
     uint64_t video_bytes = 0;
     if (s_video_active) {
-        video_bytes = s_video_bytes;
+        video_bytes = s_video_stats.bytes;
         // Stop the stream, also after it ended, as the app does.
         send_artemis_command(770, "", "ARTEMIS StopPlayRecord");
         ESP_LOGI(TAG,
@@ -881,14 +781,16 @@ static void finish_current_download(bool stored, bool stop_all)
                  "audio frames, %u markers dropped, %u records of another "
                  "session, %u other records, %llu + %llu bytes",
                  (long long)e.dir_num, (long long)e.media_num,
-                 (unsigned)s_video_frames, (long long)s_video_total_frames,
-                 (unsigned)s_video_audio_frames, (unsigned)s_video_markers,
-                 (unsigned)s_video_foreign_records,
-                 (unsigned)s_video_other_records,
-                 (unsigned long long)s_video_media_bytes,
-                 (unsigned long long)s_video_audio_bytes);
+                 (unsigned)s_video_stats.frames,
+                 (long long)s_video_total_frames,
+                 (unsigned)s_video_stats.audio_frames,
+                 (unsigned)s_video_stats.markers,
+                 (unsigned)s_video_stats.foreign_records,
+                 (unsigned)s_video_stats.other_records,
+                 (unsigned long long)s_video_stats.media_bytes,
+                 (unsigned long long)s_video_stats.audio_bytes);
         log_video_transfer();
-        stored = stored && s_video_frames > 0;
+        stored = stored && s_video_stats.frames > 0;
         report_video_end(e, stored);
         if (kDiscardVideoData) {
             const int64_t elapsed_ms =
@@ -1083,7 +985,7 @@ static void check_download_stall(int64_t now_us)
         // The camera does not mark the end of the stream; it stops sending.
         const bool all_video_frames =
             s_video_total_frames > 0 &&
-            static_cast<int64_t>(s_video_frames) >= s_video_total_frames;
+            static_cast<int64_t>(s_video_stats.frames) >= s_video_total_frames;
         const int64_t idle_us = all_video_frames
                                     ? CAMERA_VIDEO_END_IDLE_COMPLETE_US
                                     : CAMERA_VIDEO_END_IDLE_US;
@@ -1106,18 +1008,14 @@ static void check_download_stall(int64_t now_us)
 static bool timed_write(camera::store::MediaFileWriter &file,
                         const uint8_t *data, size_t size)
 {
-    s_video_bytes += size;
+    s_video_stats.bytes += size;
     if (kDiscardVideoData) {
         return true;
     }
     send_bulk_ack_before_waiting(size);
     const int64_t started_us = esp_timer_get_time();
     const bool ok = camera::store::sd_writer_write(file, data, size);
-    const int64_t took_us = esp_timer_get_time() - started_us;
-    s_video_write_us += took_us;
-    if (took_us > s_video_write_max_us) {
-        s_video_write_max_us = took_us;
-    }
+    s_video_stats.note_write(esp_timer_get_time() - started_us);
     return ok;
 }
 
@@ -1129,8 +1027,8 @@ static bool accept_video_frame(const camera::artemis::PlaybackFrame &frame)
     if (frame.session_no == s_video_session_no) {
         return true;
     }
-    if (++s_video_foreign_records < CAMERA_VIDEO_ADOPT_SESSION_RECORDS ||
-        s_video_frames + s_video_audio_frames > 0) {
+    if (++s_video_stats.foreign_records < CAMERA_VIDEO_ADOPT_SESSION_RECORDS ||
+        s_video_stats.frames + s_video_stats.audio_frames > 0) {
         return false;
     }
     ESP_LOGW(TAG, "Camera uses session %u instead of %u; following it",
@@ -1146,7 +1044,7 @@ static bool write_video_data(camera::artemis::PlaybackKind kind,
     const bool audio = kind == camera::artemis::PlaybackKind::audio;
     camera::store::MediaFileWriter &file =
         audio ? s_video->audio : s_video->video;
-    (audio ? s_video_audio_bytes : s_video_media_bytes) += size;
+    (audio ? s_video_stats.audio_bytes : s_video_stats.media_bytes) += size;
     if (!timed_write(file, data, size)) {
         s_video_write_failed = true;
         return false;
@@ -1161,24 +1059,25 @@ finish_video_frame(const camera::artemis::PlaybackDecoder::FrameInfo &info,
 {
     const camera::artemis::PlaybackFrame &frame = info.frame;
     if (frame.kind == camera::artemis::PlaybackKind::audio) {
-        s_video_audio_frames++;
+        s_video_stats.audio_frames++;
         return true;
     }
     if (marker) {
-        s_video_markers++;
+        s_video_stats.markers++;
         return true;
     }
-    if (s_video_frames == 0) {
+    if (s_video_stats.frames == 0) {
         ESP_LOGI(TAG, "First video frame: %ux%u, pts %u ms, %u bytes",
                  (unsigned)frame.width, (unsigned)frame.height,
                  (unsigned)frame.pts_ms, (unsigned)frame.size);
         ESP_LOG_BUFFER_HEX_LEVEL(TAG, info.first_bytes, info.first_size,
                                  ESP_LOG_INFO);
     }
-    if (++s_video_frames % CAMERA_VIDEO_LOG_FRAMES == 0) {
+    if (++s_video_stats.frames % CAMERA_VIDEO_LOG_FRAMES == 0) {
         ESP_LOGI(TAG, "Video: %u of %lld frames, %llu KB",
-                 (unsigned)s_video_frames, (long long)s_video_total_frames,
-                 (unsigned long long)(s_video_bytes / 1024));
+                 (unsigned)s_video_stats.frames,
+                 (long long)s_video_total_frames,
+                 (unsigned long long)(s_video_stats.bytes / 1024));
         log_video_transfer();
     }
     return true;
@@ -1187,7 +1086,7 @@ finish_video_frame(const camera::artemis::PlaybackDecoder::FrameInfo &info,
 // A record that is not a usable playback record.
 static void count_other_record()
 {
-    s_video_other_records++;
+    s_video_stats.other_records++;
 }
 
 // Handles one frame of the playback stream (bulk subtype 0x02).
@@ -1222,9 +1121,10 @@ static void handle_playback_frame(int socket_fd,
         const int window = CAMERA_DOWNLOAD_REORDER_FRAMES;
         if (delta > window || delta < -window) {
             if (delta < 0) {
-                s_video_far_behind++;
+                s_video_stats.far_behind++;
             }
-            if (s_video_far_logged < 40 || s_video_far_logged % 500 == 0) {
+            if (s_video_stats.far_logged < 40 ||
+                s_video_stats.far_logged % 500 == 0) {
                 ESP_LOGI(TAG,
                          "Playback frame seq %u, expected %u (delta %d), %u "
                          "bytes:",
@@ -1234,7 +1134,7 @@ static void handle_playback_frame(int socket_fd,
                                          payload_len < 16 ? payload_len : 16,
                                          ESP_LOG_INFO);
             }
-            s_video_far_logged++;
+            s_video_stats.far_logged++;
         }
     }
     const size_t pending_before = s_playback.pending_frames();
@@ -1243,9 +1143,9 @@ static void handle_playback_frame(int socket_fd,
             static_cast<int16_t>(s_playback.expected_seq() - seq);
         if (behind > 0) {
             if (pending_before == 0) {
-                s_video_repeats_without_gap++;
+                s_video_stats.repeats_without_gap++;
             }
-            if (s_video_repeat_logged < 30) {
+            if (s_video_stats.repeat_logged < 30) {
                 ESP_LOGI(TAG,
                          "Video: seq %u repeated, %d behind the expected %u, "
                          "%u frames waiting",
@@ -1253,41 +1153,28 @@ static void handle_playback_frame(int socket_fd,
                          (unsigned)s_playback.expected_seq(),
                          (unsigned)pending_before);
             }
-            s_video_repeat_logged++;
+            s_video_stats.repeat_logged++;
         }
     }
     bool ack = false;
     const PlaybackStream::Status status =
         s_playback.feed(seq, payload, payload_len, s_video_decoder, ack);
-    // A gap opens when a frame is kept waiting for a missing one, and closes
-    // when the missing frame arrives and the waiting ones are passed on.
-    const size_t pending_after = s_playback.pending_frames();
-    if (pending_before == 0 && pending_after > 0) {
-        s_video_gaps++;
-        s_video_gap_started_us = esp_timer_get_time();
-        s_video_gap_seq = s_playback.expected_seq();
-        const uint16_t missing = static_cast<uint16_t>(seq - s_video_gap_seq);
-        s_video_gap_missing = missing;
-        s_video_missing += missing;
-        s_video_missing_runs[missing <= 1    ? 0
-                             : missing <= 4  ? 1
-                             : missing <= 16 ? 2
-                                             : 3]++;
-    } else if (pending_before > 0 && pending_after == 0) {
-        const int64_t open_us = esp_timer_get_time() - s_video_gap_started_us;
-        s_video_gap_total_us += open_us;
-        if (open_us > s_video_gap_max_us) {
-            s_video_gap_max_us = open_us;
-        }
-        if (s_video_gap_logged < 30) {
+    const camera::artemis::VideoTransferStats::GapChange gap =
+        s_video_stats.note_pending(pending_before, s_playback.pending_frames(),
+                                   seq, s_playback.expected_seq(),
+                                   esp_timer_get_time());
+    if (gap.kind ==
+        camera::artemis::VideoTransferStats::GapChange::Kind::closed) {
+        if (s_video_stats.gap_logged < 30) {
             ESP_LOGI(TAG,
                      "Video: gap at seq %u (%u missing) closed after %lld ms "
                      "by seq %u, %u frames had been waiting",
-                     (unsigned)s_video_gap_seq, (unsigned)s_video_gap_missing,
-                     (long long)(open_us / 1000), (unsigned)seq,
+                     (unsigned)s_video_stats.gap_seq,
+                     (unsigned)s_video_stats.gap_missing,
+                     (long long)(gap.open_us / 1000), (unsigned)seq,
                      (unsigned)pending_before);
         }
-        s_video_gap_logged++;
+        s_video_stats.gap_logged++;
     }
     if (ack) {
         queue_bulk_ack(socket_fd, camera_address, 0x02, seq);
@@ -1304,15 +1191,15 @@ static void handle_playback_frame(int socket_fd,
         const size_t dump = payload_len < 24 ? payload_len : 24;
         ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload, dump, ESP_LOG_WARN);
         // Keep what was written; the rest of the video is missing.
-        finish_current_download(s_video_frames > 0, false);
+        finish_current_download(s_video_stats.frames > 0, false);
         return;
     }
     // Audio frames may still follow the last video frame, so the stream ends
     // only when the camera stops sending (see check_download_stall()).
     if (s_video_total_frames > 0 &&
-        static_cast<int64_t>(s_video_frames) == s_video_total_frames &&
-        !s_video_complete_logged) {
-        s_video_complete_logged = true;
+        static_cast<int64_t>(s_video_stats.frames) == s_video_total_frames &&
+        !s_video_stats.complete_logged) {
+        s_video_stats.complete_logged = true;
         ESP_LOGI(TAG, "All %lld video frames received",
                  (long long)s_video_total_frames);
     }
@@ -1349,14 +1236,14 @@ static void handle_bulk_frame(int socket_fd,
             send_udp_request(socket_fd, camera_address, "BULK ACK (stray)",
                              stray_ack);
         }
-        if (s_video_other_subtype_frames < 5) {
+        if (s_video_stats.other_subtype_frames < 5) {
             ESP_LOGI(TAG, "Video: frame on subtype 0x%02x, seq %u, %u bytes:",
                      (unsigned)subtype, (unsigned)seq, (unsigned)payload_len);
             ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload,
                                      payload_len < 16 ? payload_len : 16,
                                      ESP_LOG_INFO);
         }
-        s_video_other_subtype_frames++;
+        s_video_stats.other_subtype_frames++;
         return;
     }
     // Leftovers of a stopped video stream.
@@ -1818,7 +1705,7 @@ static esp_err_t run_artemis_session(int socket_fd,
                 heartbeat_pending = true;
                 last_heartbeat_us = now_us;
                 if (s_video_active) {
-                    s_video_heartbeats++;
+                    s_video_stats.heartbeats++;
                 }
                 ESP_LOGI(TAG,
                          "ARTEMIS heartbeat command %u, index %u awaiting ACK",
@@ -1875,16 +1762,8 @@ static esp_err_t run_artemis_session(int socket_fd,
         static uint8_t packet[camera::ArtemisRudpPacket::kMaxPacketSize];
         struct sockaddr_in source = {};
         if (s_video_active && last_receive_us != 0) {
-            const int64_t busy_us = esp_timer_get_time() - last_receive_us;
-            if (busy_us > s_video_loop_max_us) {
-                s_video_loop_max_us = busy_us;
-            }
-            if (busy_us > 10 * 1000) {
-                s_video_loop_over_10ms++;
-            }
-            if (busy_us > 50 * 1000) {
-                s_video_loop_over_50ms++;
-            }
+            s_video_stats.note_loop_busy(esp_timer_get_time() -
+                                         last_receive_us);
         }
         ssize_t received = camera_udp_receive_packet(
             socket_fd, packet, sizeof(packet), &source, "ARTEMIS");
