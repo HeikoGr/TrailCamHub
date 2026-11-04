@@ -112,6 +112,19 @@ config CAMERA_SESSION_IDLE_TIMEOUT_S
         comes, so the camera does not keep its Wi-Fi on until its battery is
         empty. Keep it above the download stall timeout.
 
+config CAMERA_MEDIA_LIST_MAX_PAGES
+    int "Media-list pages read per camera session"
+    range 1 1000
+    default 20
+    help
+        The camera hands out its media list in pages of 45 files, newest
+        first. A scan reads the pages until the list ends or this many pages
+        were read (20 pages = 900 files). Each page is a request over the
+        camera's Wi-Fi and the hub keeps the catalog in RAM, so a card with
+        more files is read only up to its newest ones; older files are
+        neither fetched nor requested. Listing only (camlist) is not limited
+        by this.
+
 config DIAG_MEMORY_LOG_INTERVAL_S
     int "Memory log interval (seconds)"
     range 0 3600

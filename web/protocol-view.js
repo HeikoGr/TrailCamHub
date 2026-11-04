@@ -645,7 +645,7 @@
       info(2480, "ARTEMIS response cmdId 512: {\"model\":\"TC100\",\"result\":0,\"cmdId\":512}"),
       info(2600, "Sent ARTEMIS GetMediaList (cmdId 768), index 3"),
       info(2900, "ARTEMIS response cmdId 768: " + mediaJson),
-      info(2910, "Media list parsed: 5 items (3 photos, 2 videos), cnt 36, pageNo 0, result 0"),
+      info(2910, "Media list parsed: 5 items (3 photos, 2 videos), 1 page(s)"),
       info(2915, "  first item: dir 100 num 36 id 4136037234 time 1766505692"),
       info(3100, "Sent ARTEMIS GetThumbnail (cmdId 772), index 4"),
       info(3400, "BULK frame: subtype 0x04 seq 0 body_len 98 payload 94 bytes"),

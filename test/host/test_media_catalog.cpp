@@ -141,7 +141,7 @@ TEST_CASE("queries return the right work items")
     CHECK(cat.count_with_flag(MediaCatalog::kThumbPresent) == 1);
 }
 
-TEST_CASE("missing_downloads lists photos before videos")
+TEST_CASE("missing_downloads lists photos before videos, each newest first")
 {
     MediaCatalog cat;
     MediaList list;
@@ -153,8 +153,8 @@ TEST_CASE("missing_downloads lists photos before videos")
     const auto both = cat.missing_downloads(true, true);
     REQUIRE(both.size() == 3);
     CHECK(both[0].media_num == 2);
-    CHECK(both[1].media_num == 1);
-    CHECK(both[2].media_num == 3);
+    CHECK(both[1].media_num == 3);
+    CHECK(both[2].media_num == 1);
     CHECK(cat.missing_downloads(true, false).size() == 1);
     CHECK(cat.missing_downloads(false, true).size() == 2);
     CHECK(cat.missing_downloads(false, false).empty());
@@ -280,4 +280,72 @@ TEST_CASE("without_flag and clear_flag_everywhere support delta reporting")
     reloaded.clear_flag_everywhere(MediaCatalog::kReported);
     CHECK(reloaded.count_with_flag(MediaCatalog::kReported) == 0);
     CHECK(reloaded.without_flag(MediaCatalog::kReported, 10).size() == 4);
+}
+
+TEST_CASE("merge_page keeps the entries of earlier pages listed")
+{
+    MediaCatalog cat;
+    MediaList old_list;
+    old_list.files = {item(100, 1, 0, 11), item(100, 2, 0, 22)};
+    cat.merge(old_list);
+
+    // Two newer recordings arrived; the list now spans two pages and the
+    // known ones moved to page 1.
+    cat.begin_listing();
+    MediaList page0;
+    page0.files = {item(100, 4, 0, 44), item(100, 3, 0, 33)};
+    MediaList page1;
+    page1.files = {item(100, 2, 0, 22), item(100, 1, 0, 11)};
+    CHECK(cat.merge_page(page0) == 2);
+    CHECK(cat.merge_page(page1) == 0);
+
+    for (const CatalogEntry &e : cat.entries())
+        CHECK(e.listed);
+    CHECK(cat.missing_thumbnails().size() == 4);
+}
+
+TEST_CASE("begin_listing unlists entries that no page contains")
+{
+    MediaCatalog cat;
+    MediaList old_list;
+    old_list.files = {item(100, 1, 0, 11), item(100, 2, 0, 22)};
+    cat.merge(old_list);
+
+    cat.begin_listing();
+    MediaList page0;
+    page0.files = {item(100, 2, 0, 22)};
+    cat.merge_page(page0);
+
+    CHECK(cat.find(22)->listed);
+    CHECK_FALSE(cat.find(11)->listed);  // deleted from the card
+    REQUIRE(cat.missing_thumbnails().size() == 1);
+    CHECK(cat.missing_thumbnails()[0].media_id == 22);
+}
+
+TEST_CASE("camera work is ordered newest first, also across catalog order")
+{
+    MediaCatalog cat;
+    MediaList first;
+    first.files = {item(100, 2, 0, 22), item(100, 1, 2, 11)};
+    cat.merge(first);
+    // A later session appends newer recordings at the end of the catalog,
+    // including one in the next DCIM directory.
+    MediaList second;
+    second.files = {item(101, 1, 0, 1011), item(100, 3, 2, 33),
+                    item(100, 2, 0, 22), item(100, 1, 2, 11)};
+    cat.merge(second);
+    cat.set_flag(11, MediaCatalog::kVideoRequested);
+    cat.set_flag(33, MediaCatalog::kVideoRequested);
+
+    const auto thumbs = cat.missing_thumbnails();
+    REQUIRE(thumbs.size() == 4);
+    CHECK(thumbs[0].media_id == 1011);
+    CHECK(thumbs[1].media_id == 33);
+    CHECK(thumbs[2].media_id == 22);
+    CHECK(thumbs[3].media_id == 11);
+
+    const auto videos = cat.pending_video_requests();
+    REQUIRE(videos.size() == 2);
+    CHECK(videos[0].media_id == 33);
+    CHECK(videos[1].media_id == 11);
 }

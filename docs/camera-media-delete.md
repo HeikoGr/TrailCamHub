@@ -112,7 +112,7 @@ An empty list is `{"mediaFiles":[],"cnt":0,"pageNo":0,"getMediaListRet":0,"error
 ## The media list after deletions
 
 - The list is sorted by descending number, 45 entries per page. `cnt` is the number of entries **on the page** (45 and 11 for 56 files), not the total; a page past the end is empty with `result` 0.
-- Deleting moves older files forward into page 0. The hub only asks for page 0 today, so it never sees files older than the newest 45 until newer ones are gone (#117).
+- Deleting moves older files forward into page 0. The hub reads all pages of the list (up to `CAMERA_MEDIA_LIST_MAX_PAGES`, see #117), so this only changes which page a file is on.
 - From reading the code, not tested: entries deleted on the camera stay in the hub catalog with `listed = false` (`MediaCatalog::merge()`), and `missing_thumbnails()` and `missing_downloads()` skip those. A deleted file is thus not requested again, and a reused number cannot be fetched under an old `mediaId`, as long as the list is from the same session.
 
 ## If this gets implemented
