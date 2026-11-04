@@ -121,9 +121,14 @@ IDs and shapes confirmed against captured app logs)
 | 258 | START_AV | C→D | start audio/video stream |
 | 259 | STOP_AV | C→D | stop stream |
 | 512 | GET_DEV_INFO | C→D | device/firmware/battery/SD info |
+| 518 | FORMAT_SD_CARD | C→D | erases the card, see [`camera-media-delete.md`](camera-media-delete.md) |
 | 525 | HEARTBEAT | C→D | keep-alive, ~every 3 s, fire-and-forget |
+| 641 | TRIGGER_SNAP | C→D | takes a photo |
+| 643 / 644 | TRIGGER_RECORD / STOP_RECORD | C→D | starts / stops a video |
 | 768 | GET_MEDIA_LIST | C→D | list stored media |
 | 772 | GET_THUMBNAIL | C→D | media thumbnails |
+| 773 | DELETE_MEDIA | C→D | deletes one file, see [`camera-media-delete.md`](camera-media-delete.md) |
+| 774 | DELETE_MEDIA_ALL | C→D | no effect and no answer on firmware 2.2.5.9 |
 
 The login, device-info and media-list exchanges below are **[verified on hardware]**
 (TC100, firmware 2.3.0.3, model "Wi-Fi TrailCam" / `LUTRANSTRA`).
