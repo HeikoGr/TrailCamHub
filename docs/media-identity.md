@@ -54,7 +54,10 @@ Checked on hardware by the maintainer (November 2026):
   requested videos): any other entry is not on the card, and its `dir`/`num`
   may belong to another recording now.
 - The answer to a thumbnail request names `dir`/`num`; it is matched to the
-  listed entry with that `dir`/`num`.
+  listed entry with that `dir`/`num`. Its record header also carries the
+  `mediaId` (offset `0x28`, see `media_transfer.hpp`); a non-zero id that
+  differs from the entry's is logged as a warning, an id of 0 is treated as
+  missing (#105).
 - `catalog.csv` has the header `# trailcamhub-catalog v3`. The columns never
   changed (`dir,num,mediaId,fileType,mediaTime,flags`). v1 was keyed by
   `dir`/`num`; v2 was keyed by `mediaId` but its files were still named by

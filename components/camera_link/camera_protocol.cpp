@@ -1794,7 +1794,11 @@ static void handle_bulk_frame(int socket_fd,
                          (long long)header.media_num);
             } else {
                 const int64_t media_id = entry->media_id;
-                if (header.media_id != media_id) {
+                if (header.media_id == 0) {
+                    ESP_LOGD(
+                        TAG, "Thumbnail dir %lld num %lld carries no media id",
+                        (long long)header.dir_num, (long long)header.media_num);
+                } else if (header.media_id != media_id) {
                     ESP_LOGW(TAG,
                              "Thumbnail dir %lld num %lld: record id %lld, "
                              "list mediaId %lld",

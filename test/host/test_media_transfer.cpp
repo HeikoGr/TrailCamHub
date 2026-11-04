@@ -54,10 +54,10 @@ std::vector<std::uint8_t> make_payload(std::uint16_t dir_num,
     p[0x21] = static_cast<std::uint8_t>((dir_num >> 8) & 0xff);
     p[0x22] = static_cast<std::uint8_t>(media_num & 0xff);
     p[0x23] = static_cast<std::uint8_t>((media_num >> 8) & 0xff);
-    p[0x30] = static_cast<std::uint8_t>(media_id & 0xff);
-    p[0x31] = static_cast<std::uint8_t>((media_id >> 8) & 0xff);
-    p[0x32] = static_cast<std::uint8_t>((media_id >> 16) & 0xff);
-    p[0x33] = static_cast<std::uint8_t>((media_id >> 24) & 0xff);
+    p[0x28] = static_cast<std::uint8_t>(media_id & 0xff);
+    p[0x29] = static_cast<std::uint8_t>((media_id >> 8) & 0xff);
+    p[0x2a] = static_cast<std::uint8_t>((media_id >> 16) & 0xff);
+    p[0x2b] = static_cast<std::uint8_t>((media_id >> 24) & 0xff);
     p.insert(p.end(), jpeg.begin(), jpeg.end());
     return p;
 }
@@ -104,6 +104,28 @@ TEST_CASE("parse_media_record accepts a header-only record")
     CHECK(header.media_id == 1343182691);
     CHECK(jpeg_offset == kMediaRecordHeaderSize);
     CHECK(jpeg_size == 0);
+}
+
+TEST_CASE("parse_media_record reads a real thumbnail header (#105)")
+{
+    // Header of a thumbnail from a TC100 (firmware 2.2.5.9); the media list
+    // named dir 100 num 3 with mediaId 2597690595 and 17361 JPEG bytes.
+    std::vector<std::uint8_t> payload = {
+        0x46, 0x34, 0x3a, 0x43, 0x31, 0x3a, 0x35, 0x36, 0x3a, 0x30, 0x36, 0x3a,
+        0x45, 0x44, 0x3a, 0x33, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x03, 0x00,
+        0xd1, 0x43, 0x00, 0x00, 0xe3, 0x9c, 0xd5, 0x9a, 0x00, 0x00, 0x00, 0x00};
+    payload.resize(kMediaRecordHeaderSize + 17361, 0);
+
+    MediaRecordHeader header;
+    std::size_t jpeg_offset = 0;
+    std::size_t jpeg_size = 0;
+    REQUIRE(parse_media_record(payload.data(), payload.size(), header,
+                               jpeg_offset, jpeg_size));
+    CHECK(header.dir_num == 100);
+    CHECK(header.media_num == 3);
+    CHECK(header.media_id == 2597690595);
+    CHECK(jpeg_size == 17361);
 }
 
 TEST_CASE("parse_media_record rejects a payload shorter than the header")
