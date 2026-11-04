@@ -57,6 +57,8 @@ struct QueuedEvent {
     esp_ip4_addr_t gateway;
     esp_err_t error;
     std::uint8_t reason;
+    // With scan_requested: only list the camera's media.
+    bool list_only;
     char ssid[MAX_SSID_LEN + 1];
     char password[MAX_PASSWORD_LEN + 1];
 };
@@ -89,6 +91,7 @@ hub_config::Settings s_settings;
 // Outcome of the camera session and the sync of the running cycle; only
 // touched by the controller task.
 bool s_camera_ok;
+bool s_list_only;
 bool s_sync_ok;
 
 // Published status; written by the controller task, read by any task.
@@ -242,6 +245,7 @@ void publish_status(const session::Result &result)
         s_status.camera_ssid[0] = '\0';
     }
     s_status.camera_ok = s_camera_ok;
+    s_status.list_only = s_list_only;
     s_status.sync_ok = s_sync_ok;
     if (s_status.cycle_finished) {
         s_last_outcome = result.outcome;
@@ -433,7 +437,8 @@ void load_settings_for_cycle()
     if (hub_config::load(s_settings) != ESP_OK) {
         s_settings = hub_config::Settings{};
     }
-    s_fsm.set_uplink_enabled(hub_config::uplink_configured(s_settings));
+    s_fsm.set_uplink_enabled(hub_config::uplink_configured(s_settings) &&
+                             !s_list_only);
 }
 
 void controller_task(void *arg)
@@ -459,6 +464,8 @@ void controller_task(void *arg)
                               event.type == session::Event::upload_requested)) {
             s_camera_ok = false;
             s_sync_ok = false;
+            s_list_only = event.list_only;
+            camera_protocol_set_list_only(s_list_only);
         }
         if (event.type == session::Event::session_ended &&
             s_fsm.state() == session::State::session && !s_fsm.stop_pending()) {
@@ -584,6 +591,17 @@ esp_err_t session_controller_request_scan(void)
         return ESP_ERR_INVALID_STATE;
     }
     post_event(make_event(session::Event::scan_requested));
+    return ESP_OK;
+}
+
+esp_err_t session_controller_request_list(void)
+{
+    if (s_events == NULL || s_state.load() != session::State::idle) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    QueuedEvent event = make_event(session::Event::scan_requested);
+    event.list_only = true;
+    post_event(event);
     return ESP_OK;
 }
 

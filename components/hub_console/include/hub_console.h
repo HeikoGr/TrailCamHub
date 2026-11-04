@@ -22,10 +22,17 @@
  *   TCH DONE                  the command is complete
  *   TCH EVENT <name> ...      asynchronous progress (from the controller)
  *
+ * After "camlist" the listing arrives as events: "TCH EVENT media <entry>" per
+ * file, then "TCH EVENT list done|truncated|failed ...". It is complete only
+ * with "list done".
+ *
  * The diagnostic commands (heap, ls, cat, rm, sdbench) are built with
  * CONFIG_HUB_CONSOLE_DIAGNOSTICS.
  */
 esp_err_t hub_console_start(void);
+
+/* Prints a line of a camera media listing as an event. */
+void hub_console_list_event(const char *line);
 
 /* Reports the media download progress for the status command. */
 void hub_console_set_media_progress(uint32_t done, uint32_t stored,

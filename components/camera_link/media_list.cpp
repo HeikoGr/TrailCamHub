@@ -1,5 +1,8 @@
 #include "media_list.hpp"
 
+#include <cstdio>
+#include <ctime>
+
 #include "artemis_json.hpp"
 
 namespace camera::artemis
@@ -60,6 +63,31 @@ bool parse_media_list(const std::string &json, MediaList &out)
 bool media_list_failed(const MediaList &list)
 {
     return list.list_ret != 0;
+}
+
+std::string media_list_request_fields(std::int64_t page_no)
+{
+    return ",\"itemCntPerPage\":" + std::to_string(kMediaListPageSize) +
+           ",\"pageNo\":" + std::to_string(page_no);
+}
+
+bool media_list_has_more(const MediaList &list)
+{
+    return static_cast<std::int64_t>(list.files.size()) >= kMediaListPageSize;
+}
+
+std::string format_media_item(const MediaItem &item)
+{
+    // The wall clock is read as if it were UTC, so gmtime gives it unchanged.
+    const std::time_t wall = static_cast<std::time_t>(item.time);
+    struct tm parts = {};
+    gmtime_r(&wall, &parts);
+    char time_text[32];
+    std::strftime(time_text, sizeof(time_text), "%Y-%m-%dT%H:%M:%S", &parts);
+    return "type=" + std::to_string(item.file_type) +
+           " dir=" + std::to_string(item.dir_num) +
+           " num=" + std::to_string(item.num) +
+           " id=" + std::to_string(item.id) + " time=" + time_text;
 }
 
 }  // namespace camera::artemis

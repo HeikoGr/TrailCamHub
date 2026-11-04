@@ -41,4 +41,25 @@ bool parse_media_list(const std::string &json, MediaList &out);
 // it is also set on success ("Success").
 bool media_list_failed(const MediaList &list);
 
+// Entries per page that the hub asks for. The camera does not report a total
+// ("cnt" counts the entries of the page), so a page with fewer entries is the
+// last one; a page past the end is empty.
+constexpr std::int64_t kMediaListPageSize = 45;
+
+// Pages read at most: a stop for a camera that never sends a short page.
+constexpr std::int64_t kMediaListMaxPages = 1000;
+
+// The fields of a media-list request for a page, in the form that
+// send_artemis_command() takes: ",\"itemCntPerPage\":45,\"pageNo\":0".
+std::string media_list_request_fields(std::int64_t page_no);
+
+// True if a page with the entries of `list` may be followed by another one.
+bool media_list_has_more(const MediaList &list);
+
+// One entry as text, for example
+// "type=2 dir=100 num=56 id=1828790833 time=2026-11-03T21:11:28". The type is
+// the camera's fileType. The time is the camera's wall clock as it shows it,
+// so it has no zone (see docs/clock.md).
+std::string format_media_item(const MediaItem &item);
+
 }  // namespace camera::artemis

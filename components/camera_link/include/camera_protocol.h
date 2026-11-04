@@ -44,6 +44,24 @@ typedef void (*camera_protocol_progress_cb_t)(uint32_t done, uint32_t stored,
                                               uint32_t total);
 
 /*
+ * Makes the following sessions only list the camera's media, or return to
+ * normal ones: they read all pages of the media list, report them through the
+ * list callback and end. No thumbnail or file is fetched, and the catalog on
+ * the SD card is not touched. Set it before camera_protocol_run().
+ */
+void camera_protocol_set_list_only(bool list_only);
+
+/*
+ * Receives the lines of a listing: "media <entry>" per file (see
+ * format_media_item()), then "list done files=<n> pages=<n>",
+ * "list truncated files=<n> pages=<n>" or "list failed <reason>". Without the
+ * final line the session ended early. Called from the camera session task;
+ * must return quickly.
+ */
+typedef void (*camera_protocol_list_cb_t)(const char *line);
+void camera_protocol_set_list_callback(camera_protocol_list_cb_t cb);
+
+/*
  * Prepares writing media files to the SD card in the background (a task and
  * its buffer in PSRAM). Call once at boot, after the SD card is mounted;
  * without it files are written directly.

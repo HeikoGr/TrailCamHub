@@ -366,6 +366,9 @@ void execute(const hub_console::Command &command)
     case CommandType::scan:
         request_cycle(session_controller_request_scan(), "scan");
         break;
+    case CommandType::camlist:
+        request_cycle(session_controller_request_list(), "camlist");
+        break;
     case CommandType::upload:
         request_cycle(session_controller_request_upload(), "upload");
         break;
@@ -511,6 +514,11 @@ esp_err_t hub_console_start(void)
     ESP_LOGI(TAG, "Serial commands ready; type 'help'");
     reply("READY", session_controller_state_name());
     return ESP_OK;
+}
+
+void hub_console_list_event(const char *line)
+{
+    event(line);
 }
 
 void hub_console_set_media_progress(uint32_t done, uint32_t stored,

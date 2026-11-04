@@ -87,6 +87,12 @@ typedef struct {
      */
     bool camera_ok;
     bool sync_ok;
+    /*
+     * The cycle only lists the camera's media
+     * (session_controller_request_list()). Kept after the cycle ends and
+     * cleared when the next cycle starts.
+     */
+    bool list_only;
     /* True only on the update that ends a cycle. */
     bool cycle_finished;
     /* Result of the last finished cycle; NONE while a new one runs. */
@@ -123,6 +129,14 @@ esp_err_t session_controller_start(void);
  * ESP_ERR_INVALID_STATE while a cycle is running.
  */
 esp_err_t session_controller_request_scan(void);
+
+/*
+ * Requests a listing of the media on the camera (see
+ * camera_protocol_set_list_only()): a camera part without any fetching and
+ * without a backend sync, which does not count as a read of the camera for the
+ * schedule. Returns ESP_ERR_INVALID_STATE while a cycle is running.
+ */
+esp_err_t session_controller_request_list(void);
 
 /*
  * Requests a backend sync of the data already on the SD card. Returns
