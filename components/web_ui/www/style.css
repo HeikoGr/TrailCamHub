@@ -413,6 +413,10 @@ pre {
 
 #viewer .body {
   display: grid;
+  /* One cell of exactly the free space: without a definite size, the
+     max-height of the video below does not apply, and a landscape video
+     grows out of the window with its controls. */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
   flex: 1;
   min-height: 0;
