@@ -81,6 +81,12 @@ class PlaybackStream
     {
         return reorder_.stats();
     }
+    // Whether the last feed() took a new frame, passed on or kept in the
+    // window; repeats and frames that are not kept do not count.
+    bool progressed() const
+    {
+        return progressed_;
+    }
 
   private:
     // Collects the payload of each record for a RecordSink.
@@ -112,6 +118,7 @@ class PlaybackStream
     std::size_t payload_left_ = 0;
     std::uint64_t records_ = 0;
     bool failed_ = false;
+    bool progressed_ = false;
     Collector collector_;
 };
 

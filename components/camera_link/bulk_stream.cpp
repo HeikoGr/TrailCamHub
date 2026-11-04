@@ -35,6 +35,7 @@ void BulkStream::reset()
     len_ = 0;
     have_header_ = false;
     failed_ = false;
+    progressed_ = false;
 }
 
 bool BulkStream::deliver(const std::uint8_t *frame, std::size_t size,
@@ -74,6 +75,7 @@ BulkStream::Status BulkStream::feed(std::uint16_t seq,
                                     bool &ack)
 {
     ack = false;
+    progressed_ = false;
     if (failed_) {
         return Status::invalid;
     }
@@ -99,6 +101,7 @@ BulkStream::Status BulkStream::feed(std::uint16_t seq,
         have_header_ = true;
     }
 
+    const std::uint64_t kept_before = reorder_.kept_frames();
     const FrameReorder::Outcome outcome = reorder_.feed(
         seq, payload, size,
         [this, &sink](std::uint64_t index, const std::uint8_t *frame,
@@ -110,6 +113,7 @@ BulkStream::Status BulkStream::feed(std::uint16_t seq,
         return Status::invalid;
     }
     ack = FrameReorder::acknowledge(outcome);
+    progressed_ = reorder_.kept_frames() > kept_before;
     return reorder_.complete() ? Status::complete : Status::incomplete;
 }
 

@@ -34,6 +34,7 @@ void PlaybackStream::reset()
     payload_left_ = 0;
     records_ = 0;
     failed_ = false;
+    progressed_ = false;
     collector_.reset();
 }
 
@@ -125,6 +126,7 @@ PlaybackStream::Status PlaybackStream::feed(std::uint16_t seq,
                                             RecordHandler &handler, bool &ack)
 {
     ack = false;
+    progressed_ = false;
     if (failed_) {
         return Status::invalid;
     }
@@ -138,6 +140,7 @@ PlaybackStream::Status PlaybackStream::feed(std::uint16_t seq,
         }
         reorder_.start(seq);
     }
+    const std::uint64_t kept_before = reorder_.kept_frames();
     const FrameReorder::Outcome outcome =
         reorder_.feed(seq, payload, size,
                       [this, &handler](std::uint64_t, const std::uint8_t *frame,
@@ -149,6 +152,7 @@ PlaybackStream::Status PlaybackStream::feed(std::uint16_t seq,
         return Status::invalid;
     }
     ack = FrameReorder::acknowledge(outcome);
+    progressed_ = reorder_.kept_frames() > kept_before;
     return Status::ok;
 }
 
