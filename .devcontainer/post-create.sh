@@ -23,7 +23,4 @@ clang-format --version
 node --version
 cmake --version | head -n 1
 g++ --version | head -n 1
-
-if ls /dev/serial/by-id/* >/dev/null 2>&1; then
-    ls -l /dev/serial/by-id/
-fi
+claude --version

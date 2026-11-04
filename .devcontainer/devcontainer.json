@@ -5,7 +5,8 @@
   "build": { "dockerfile": "Dockerfile" },
   "features": {
     "ghcr.io/devcontainers/features/node:1": { "version": "22" },
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/project,type=bind,consistency=cached",
   "workspaceFolder": "/project",
@@ -13,10 +14,13 @@
   "userEnvProbe": "loginInteractiveShell",
   "containerEnv": {
     "IDF_PATH": "/opt/esp/idf",
-    "IDF_CCACHE_ENABLE": "1"
+    "IDF_CCACHE_ENABLE": "1",
+    // Moves ~/.claude.json (account, onboarding) into the volume below; in the
+    // home directory it would be lost on every rebuild.
+    "CLAUDE_CONFIG_DIR": "/root/.claude"
   },
   // Kept across rebuilds: ccache, the ESP-IDF component and pip caches, and
-  // Claude Code's sessions and notes.
+  // Claude Code's login, settings, sessions and notes.
   "mounts": [
     "source=trailcamhub-cache,target=/root/.cache,type=volume",
     "source=trailcamhub-claude,target=/root/.claude,type=volume"

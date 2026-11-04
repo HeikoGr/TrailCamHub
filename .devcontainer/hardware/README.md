@@ -1,8 +1,11 @@
 # Dev container with USB boards
 
 `devcontainer.json` in this directory is a second dev container configuration.
-It bind-mounts the host's `/dev`, so `idf.py -p /dev/ttyACM0 flash monitor`
-works from inside the container. Choose it with **Dev Containers: Rebuild and
+It bind-mounts the host's `/dev` at `/dev/host`, and `post-start.sh` links the
+serial devices to their usual names (`/dev/ttyACM0` to `9`, `/dev/ttyUSB0` to
+`9`, `/dev/serial`), so `idf.py -p /dev/ttyACM0 flash monitor` works from
+inside the container. These links dangle until a board with that number is
+plugged in. Choose the configuration with **Dev Containers: Rebuild and
 Reopen in Container**. The default configuration in `.devcontainer/` has no
 device access and is the one Codespaces uses. Both build the same image
 (`.devcontainer/Dockerfile`) and share the cache volumes.
@@ -10,9 +13,15 @@ device access and is the one Codespaces uses. Both build the same image
 ## What the container may access
 
 The container does not run with `--privileged`. It sees all nodes of the
-host's `/dev`, but two device cgroup rules allow it to open only character
-devices with the major numbers of the serial ports: 166 (`ttyACM`:
+host's `/dev` under `/dev/host`. Two device cgroup rules add the major numbers
+of the serial ports to the devices Docker allows by default: 166 (`ttyACM`:
 USB-Serial-JTAG, CH343) and 188 (`ttyUSB`: CH34x and other USB-UART bridges).
+
+The host's `/dev` must not be mounted on `/dev` itself. The container would
+then lose its own `/dev/pts`, and with rootless Docker every `docker exec -t`
+fails, including the lifecycle commands of the dev container: `reopen ptmx to
+get new pty pair: reopen fd 9: permission denied` (runc opens `/dev/pts/ptmx`,
+which has mode 000 on a typical host).
 
 The configuration is meant for **rootless Docker**: there the container's
 `root` is the host user and has no more rights than that user. The device
@@ -20,9 +29,10 @@ cgroup rules do not restrict anything in this case; the host user's
 permissions decide (see the host setup below).
 
 With **rootful Docker** the container's `root` is the host's `root`. The
-device cgroup rules then keep disks and all other devices closed, but the
-container can open every serial device of the host, whatever its owner and
-mode. Claude Code runs in this container; keep that in mind before you use the
+device cgroup rules then keep disks closed, but the container can open every
+serial device of the host, whatever its owner and mode, and also the host's
+terminals in `/dev/host/pts`, because Docker's defaults allow terminals (major
+136). Claude Code runs in this container; keep that in mind before you use the
 configuration with rootful Docker.
 
 ## Host setup (Linux)

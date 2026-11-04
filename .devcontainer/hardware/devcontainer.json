@@ -3,12 +3,15 @@
 // and Reopen in Container" offers it next to the default one). The default
 // configuration stays without device access, so it also works in Codespaces.
 //
-// The host's /dev is bind-mounted, so boards that are plugged in later, or
-// that enumerate again after a reset (USB-Serial-JTAG), appear without a
-// rebuild. No --privileged: with rootful Docker, the device cgroup rules let
-// the container open only serial devices (ttyACM, ttyUSB), not disks or other
-// devices. Meant for rootless Docker, where the container's root is the host
-// user, so the host user needs read and write access to the serial devices; see
+// The host's /dev is bind-mounted at /dev/host, so boards that are plugged in
+// later, or that enumerate again after a reset (USB-Serial-JTAG), appear
+// without a rebuild; post-start.sh links them to the usual names. It must not
+// be mounted on /dev: the container would lose its own /dev/pts, and with
+// rootless Docker every "docker exec -t" then fails (the host's /dev/pts/ptmx
+// has mode 000). No --privileged: with rootful Docker, the device cgroup rules
+// add only serial devices (ttyACM, ttyUSB) to Docker's defaults. Meant for
+// rootless Docker, where the container's root is the host user, so the host
+// user needs read and write access to the serial devices; see
 // .devcontainer/hardware/README.md. Apart from that, keep this file in step
 // with ../devcontainer.json.
 {
@@ -16,7 +19,8 @@
   "build": { "dockerfile": "../Dockerfile", "context": ".." },
   "features": {
     "ghcr.io/devcontainers/features/node:1": { "version": "22" },
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/project,type=bind,consistency=cached",
   "workspaceFolder": "/project",
@@ -28,12 +32,14 @@
   ],
   "containerEnv": {
     "IDF_PATH": "/opt/esp/idf",
-    "IDF_CCACHE_ENABLE": "1"
+    "IDF_CCACHE_ENABLE": "1",
+    "CLAUDE_CONFIG_DIR": "/root/.claude"
   },
   "mounts": [
-    "source=/dev,target=/dev,type=bind",
+    "source=/dev,target=/dev/host,type=bind",
     "source=trailcamhub-cache,target=/root/.cache,type=volume",
     "source=trailcamhub-claude,target=/root/.claude,type=volume"
   ],
-  "postCreateCommand": "bash .devcontainer/post-create.sh"
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "bash .devcontainer/hardware/post-start.sh"
 }
