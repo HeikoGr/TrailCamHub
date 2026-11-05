@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { DemoApiClient } from './api/demo';
-import type { ApiClient } from './api/types';
+import type { ApiClient, Camera } from './api/types';
 import { App } from './App';
 import { fakeWebApp } from './test-utils';
 
@@ -52,6 +52,38 @@ describe('App', () => {
     render(<App api={single} now={() => NOW} />);
     expect(await screen.findByRole('heading', { name: 'Garden' })).toBeInTheDocument();
     expect(screen.queryByRole('navigation', { name: 'Cameras' })).not.toBeInTheDocument();
+  });
+
+  it('warns about a camera without an SD card and about a full card', async () => {
+    const api = demoApi();
+    const withCards = (cards: Array<Partial<Camera>>): ApiClient => ({
+      isDemo: false,
+      listCameras: async () =>
+        (await api.listCameras()).map((camera, i) => ({ ...camera, ...cards[i] })),
+      listMedia: (id) => api.listMedia(id),
+      requestVideo: (id, item) => api.requestVideo(id, item),
+      readCamera: (id) => api.readCamera(id),
+      setSchedule: (id, config) => api.setSchedule(id, config),
+    });
+    render(
+      <App
+        api={withCards([
+          { sdCard: 'missing', sdError: 'Memory card not exist', sdFreeMB: 0, sdTotalMB: 0 },
+          { sdFreeMB: 900, sdTotalMB: 15_193 },
+        ])}
+        now={() => NOW}
+      />,
+    );
+
+    const garden = await screen.findByRole('region', { name: 'Status of Garden' });
+    expect(within(garden).getByRole('alert')).toHaveTextContent('No SD card in the camera');
+    expect(within(garden).getByRole('alert')).toHaveTextContent('Memory card not exist');
+    expect(within(garden).getByText('Missing')).toBeInTheDocument();
+    expect(within(garden).queryByText('SD free')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Meadow/ }));
+    const meadow = await screen.findByRole('region', { name: 'Status of Meadow' });
+    expect(within(meadow).getByRole('alert')).toHaveTextContent('almost full: 900 MB free');
   });
 
   it('greets the Telegram user', async () => {

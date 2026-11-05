@@ -29,4 +29,14 @@ bool json_find_string(const std::string &json, const std::string &key,
 std::string json_set_int(const std::string &json, const std::string &key,
                          std::int64_t value);
 
+// `text` as a JSON string literal (with the quotes): `"` and `\` are escaped,
+// control characters are dropped.
+std::string json_quote(const std::string &text);
+
+// Like json_set_int for the string field `key`. An existing field of that name
+// is replaced whatever its value; the value of an existing field must be a
+// string or a number.
+std::string json_set_string(const std::string &json, const std::string &key,
+                            const std::string &value);
+
 }  // namespace camera::artemis

@@ -75,6 +75,8 @@ request (and TLS handshake) however many cameras there are — important over LT
          "firmware": "2.3.0.3",
          "batPercent": 78,
          "sdFreeMB": 28412,
+         "sdTotalMB": 30436,
+         "sdCard": "ok",
          "media": [
            { "mediaId": 4136037234, "dir": 100, "num": 36, "fileType": 0, "mediaTime": 1766505692 }
          ]
@@ -88,6 +90,11 @@ request (and TLS handshake) however many cameras there are — important over LT
      backend only adds entries, so repeating one is harmless.
    - `readAt` (hub clock) becomes the camera's "last seen"; implausible values are
      replaced by the server time.
+   - `sdCard`: the camera's SD card at the hub's last media list, `ok` or
+     `missing` (the camera answered the list with an error, as it does without a
+     card); with `missing` also `sdError`, the camera's message (e.g.
+     `Memory card not exist`). Absent if the hub does not know; the stored state is then
+     kept. `sdFreeMB`/`sdTotalMB` come from the device info (cmdId 512).
    - Limits per request: 16 cameras, 2000 media entries.
 
    The response has one entry per reported camera, plus every other camera of the

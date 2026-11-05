@@ -97,7 +97,8 @@ void on_status(const session_status_t *status, void *context)
         // spend its battery on them.
         end.camera_failed =
             status->last_result == SESSION_RESULT_CAMERA_UNREACHABLE ||
-            status->last_result == SESSION_RESULT_CAMERA_NO_CARD;
+            status->last_result == SESSION_RESULT_CAMERA_NO_CARD ||
+            (status->camera_no_card && !stopped);
         end.sync_attempted =
             status->last_result == SESSION_RESULT_UPLINK_DONE ||
             status->last_result == SESSION_RESULT_UPLINK_UNREACHABLE;

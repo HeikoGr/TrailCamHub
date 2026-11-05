@@ -74,7 +74,10 @@ enum class Outcome : std::uint8_t {
     camera_listed,       // listing of the camera's media done (no sync)
     uplink_done,         // camera session (if any) and uplink done
     camera_unreachable,  // all camera attempts failed
-    camera_no_card,      // the camera has no SD card (media list error)
+    // The camera has no SD card (media list error) and no sync followed:
+    // none is configured, or the cycle only lists. With a sync the cycle ends
+    // with uplink_done or uplink_unreachable and Fsm::no_card() is set.
+    camera_no_card,
     uplink_unreachable,  // the home Wi-Fi could not be joined
     stopped,             // ended early by a stop request
 };
@@ -101,10 +104,12 @@ enum class FrontEndPhase : std::uint8_t {
 };
 
 // Front-end phase for the FSM `state`; `last_outcome` is the outcome of the
-// last finished cycle (none while a cycle runs or before the first one), and
-// `camera_partial` whether its camera session ended early (Fsm::partial()).
+// last finished cycle (none while a cycle runs or before the first one),
+// `camera_partial` whether its camera session ended early (Fsm::partial())
+// and `camera_no_card` whether the camera had no SD card (Fsm::no_card()).
 FrontEndPhase front_end_phase(State state, Outcome last_outcome,
-                              bool camera_partial = false);
+                              bool camera_partial = false,
+                              bool camera_no_card = false);
 
 // The event that reports the end of a camera session: `ok` if it did all its
 // work, `media_list_error` if the camera reported an error for its media list
@@ -162,6 +167,11 @@ class Fsm
     // after storing some media. Cleared when a cycle starts.
     bool partial() const;
 
+    // The camera of the current (or last) cycle reported no SD card. The
+    // cycle still syncs (if configured), so that the backend learns about
+    // it. Cleared when a cycle starts.
+    bool no_card() const;
+
   private:
     Result transition(State next, std::uint32_t actions,
                       std::uint32_t timer_ms = 0,
@@ -178,6 +188,7 @@ class Fsm
     std::uint32_t attempt_{0};
     bool stop_pending_{false};
     bool partial_{false};
+    bool no_card_{false};
 };
 
 const char *to_string(State state);

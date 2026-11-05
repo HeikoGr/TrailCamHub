@@ -25,6 +25,7 @@ import type {
   MediaRecord,
   ScheduleConfig,
   ScheduleOrigin,
+  SdCardState,
 } from './model';
 import { ID_PATTERN, isMediaId } from './model';
 import {
@@ -35,7 +36,7 @@ import {
   parsePlan,
 } from './schedule';
 import type { MediaStorage } from './storage';
-import type { Store } from './store/types';
+import type { CameraTelemetry, Store } from './store/types';
 
 export interface Deps {
   store: Store;
@@ -150,6 +151,9 @@ function toCamera(
     firmware: record.firmware ?? 'unknown',
     batPercent: record.batPercent ?? 0,
     sdFreeMB: record.sdFreeMB ?? 0,
+    sdTotalMB: record.sdTotalMB,
+    sdCard: record.sdCard ?? 'unknown',
+    sdError: record.sdCard === 'missing' && record.sdError ? record.sdError : undefined,
     hubBatPercent: hub?.batPercent,
     lastSeen: record.lastSeen,
     hubLastSeen: hub?.lastSeen ?? 0,
@@ -307,6 +311,16 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length <= 64 ? value : undefined;
 }
 
+const SD_CARD_STATES: SdCardState[] = ['ok', 'missing'];
+
+/** The SD card state of a camera report; an error message only with `missing`. */
+function sdCardTelemetry(report: CameraReport): Pick<CameraTelemetry, 'sdCard' | 'sdError'> {
+  const sdCard = SD_CARD_STATES.find((s) => s === report.sdCard);
+  if (sdCard === undefined) return {};
+  // An empty message clears the one of an earlier missing card.
+  return { sdCard, sdError: sdCard === 'missing' ? (optionalString(report.sdError) ?? '') : '' };
+}
+
 const ORIGINS: ScheduleOrigin[] = ['built-in', 'local', 'remote'];
 
 function origin(value: unknown): ScheduleOrigin {
@@ -428,6 +442,8 @@ async function checkin(req: ApiRequest, _p: Record<string, string>, deps: Deps) 
         firmware: optionalString(report.firmware),
         batPercent: optionalNumber(report.batPercent),
         sdFreeMB: optionalNumber(report.sdFreeMB),
+        sdTotalMB: optionalNumber(report.sdTotalMB),
+        ...sdCardTelemetry(report),
       },
       readTime(report.readAt, now),
     );

@@ -879,6 +879,25 @@ static void finish_list(const std::string &line)
     s_end_session = true;
 }
 
+// Records in camera.json what the first media-list page said about the
+// camera's SD card, so the check-in can report it.
+static void record_sd_card(const camera::artemis::MediaList &list, bool ok)
+{
+    using camera::artemis::SdCard;
+    std::string error;
+    if (!ok) {
+        error = list.error_msg.empty()
+                    ? "getMediaListRet=" + std::to_string(list.list_ret)
+                    : list.error_msg;
+    }
+    if (s_camera_id.empty() ||
+        !camera::store::set_camera_sd_card(
+            s_camera_id, ok ? SdCard::present : SdCard::missing, error)) {
+        ESP_LOGW(TAG, "Could not record the SD card state of '%s'",
+                 s_camera_id.c_str());
+    }
+}
+
 // Ends a listing that failed.
 static void fail_list(const std::string &reason)
 {
@@ -902,6 +921,9 @@ static void handle_list_page(const std::string &json)
     if (camera::artemis::media_list_failed(list)) {
         // Also without a mediaFiles array: the camera named the error.
         s_media_list_error = true;
+        if (s_list_page == 0) {
+            record_sd_card(list, false);
+        }
         fail_list("getMediaListRet=" + std::to_string(list.list_ret) +
                   (list.error_msg.empty() ? "" : " " + list.error_msg));
         return;
@@ -909,6 +931,9 @@ static void handle_list_page(const std::string &json)
     if (!parsed) {
         fail_list("no mediaFiles array");
         return;
+    }
+    if (s_list_page == 0) {
+        record_sd_card(list, true);
     }
     if (list.page_no != s_list_page) {
         fail_list("asked for page " + std::to_string(s_list_page) + ", got " +
@@ -983,6 +1008,9 @@ static void handle_scan_page(const std::string &json)
             ESP_LOGE(TAG, "Ending the camera session");
             s_media_list_error =
                 parsed && camera::artemis::media_list_failed(list);
+            if (camera::artemis::media_list_failed(list)) {
+                record_sd_card(list, false);
+            }
             s_end_session = true;
         } else {
             // Work with the pages read so far.
@@ -997,6 +1025,9 @@ static void handle_scan_page(const std::string &json)
         return;
     }
 
+    if (s_scan_page == 0) {
+        record_sd_card(list, true);
+    }
     for (const auto &item : list.files) {
         if (item.file_type == 0)
             ++s_scan_photos;

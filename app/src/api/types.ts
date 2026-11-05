@@ -20,6 +20,15 @@ export interface Camera {
   batPercent: number;
   /** Free space on the camera's SD card in MB (cmdId 512). */
   sdFreeMB: number;
+  /** Size of the camera's SD card in MB (cmdId 512); absent if unknown. */
+  sdTotalMB?: number;
+  /**
+   * The camera's SD card at the hub's last read: `missing` when the camera
+   * answered its media list with an error, as it does without a card.
+   */
+  sdCard: 'ok' | 'missing' | 'unknown';
+  /** The camera's message for a missing card, e.g. "Memory card not exist". */
+  sdError?: string;
   /** Battery of the TrailCamHub module itself, in percent; absent if unknown. */
   hubBatPercent?: number;
   /** When the hub last read the camera, Unix seconds. */

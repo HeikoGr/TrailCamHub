@@ -29,6 +29,11 @@ struct CameraReport {
     std::string firmware;           // empty = unknown
     std::int64_t bat_percent = -1;  // -1 = unknown
     std::int64_t sd_free_mb = -1;   // -1 = unknown
+    std::int64_t sd_total_mb = -1;  // -1 = unknown
+    // The camera's SD card at the last media list: "ok", "missing" or empty
+    // (unknown); with "missing" the camera's error message, if any.
+    std::string sd_card;
+    std::string sd_error;
     // Media the backend does not know yet (delta).
     std::vector<MediaRef> media;
 };

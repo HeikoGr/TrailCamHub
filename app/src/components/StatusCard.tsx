@@ -1,5 +1,5 @@
 import type { Camera } from '../api/types';
-import { batteryLevel, formatRelative, formatStorage } from '../format';
+import { batteryLevel, formatRelative, formatStorage, storageLevel } from '../format';
 
 interface Props {
   camera: Camera;
@@ -7,6 +7,8 @@ interface Props {
 }
 
 export function StatusCard({ camera, now }: Props) {
+  const noCard = camera.sdCard === 'missing';
+  const storage = noCard ? 'critical' : storageLevel(camera.sdFreeMB, camera.sdTotalMB);
   return (
     <section className="card status" aria-label={`Status of ${camera.name}`}>
       <header className="status__header">
@@ -18,6 +20,17 @@ export function StatusCard({ camera, now }: Props) {
         </div>
         <p className="hint status__seen">Seen {formatRelative(camera.lastSeen, now)}</p>
       </header>
+      {noCard && (
+        <p className="status__alert" role="alert" data-level="critical">
+          No SD card in the camera. It records nothing until a card is inserted.
+          {camera.sdError && <span className="hint"> Camera: “{camera.sdError}”</span>}
+        </p>
+      )}
+      {!noCard && storage !== 'ok' && (
+        <p className="status__alert" role="alert" data-level={storage}>
+          The camera&apos;s SD card is almost full: {formatStorage(camera.sdFreeMB)} free.
+        </p>
+      )}
       <dl className="metrics">
         <Metric
           label="Camera battery"
@@ -31,7 +44,11 @@ export function StatusCard({ camera, now }: Props) {
             level={batteryLevel(camera.hubBatPercent)}
           />
         )}
-        <Metric label="SD free" value={formatStorage(camera.sdFreeMB)} />
+        {noCard ? (
+          <Metric label="SD card" value="Missing" level="critical" />
+        ) : (
+          <Metric label="SD free" value={formatStorage(camera.sdFreeMB)} level={storage} />
+        )}
       </dl>
     </section>
   );

@@ -406,18 +406,27 @@ bool save_camera_info(const camera::artemis::DeviceInfo &info,
     const std::string dir = camera_dir(info.dev_id);
     if (!ensure_dir(dir))
         return false;
-    std::string text = camera::artemis::serialize_device_info(info);
+    // The file is rewritten at the start of every session: keep what was
+    // learned about the camera's SD card until the media list says more.
+    std::string previous;
+    const bool had_file = read_file(dir + "/camera.json", previous);
+    camera::artemis::DeviceInfo stored = info;
+    camera::artemis::DeviceInfo before;
+    if (had_file && stored.sd_card == camera::artemis::SdCard::unknown &&
+        camera::artemis::parse_device_info(previous, before)) {
+        stored.sd_card = before.sd_card;
+        stored.sd_error = before.sd_error;
+    }
+    std::string text = camera::artemis::serialize_device_info(stored);
     // Append the read time as one more field of the same flat object.
     // A clock before 2024 has not been set yet (no uplink since boot).
     constexpr std::int64_t kClockValidFrom = 1704067200;
     text.insert(text.size() - 1,
                 ",\"readAt\":" +
                     std::to_string(read_at >= kClockValidFrom ? read_at : 0));
-    // The file is rewritten at the start of every session: keep the time of
-    // the last completed sync.
-    std::string previous;
+    // Keep the time of the last completed sync as well.
     std::int64_t last_sync = 0;
-    if (read_file(dir + "/camera.json", previous) &&
+    if (had_file &&
         camera::artemis::json_find_int(previous, "lastSyncAt", last_sync)) {
         text = camera::artemis::json_set_int(text, "lastSyncAt", last_sync);
     }
@@ -447,6 +456,20 @@ bool mark_camera_synced(const std::string &camera_id, std::int64_t at)
     constexpr std::int64_t kClockValidFrom = 1704067200;
     text = camera::artemis::json_set_int(text, "lastSyncAt",
                                          at >= kClockValidFrom ? at : -1);
+    return write_file(path, text.data(), text.size());
+}
+
+bool set_camera_sd_card(const std::string &camera_id,
+                        camera::artemis::SdCard card, const std::string &error)
+{
+    const std::string path = camera_dir(camera_id) + "/camera.json";
+    std::string text;
+    if (!read_file(path, text)) {
+        return false;
+    }
+    text = camera::artemis::json_set_string(
+        text, "sdCard", camera::artemis::sd_card_name(card));
+    text = camera::artemis::json_set_string(text, "sdError", error);
     return write_file(path, text.data(), text.size());
 }
 

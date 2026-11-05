@@ -9,7 +9,10 @@ import type {
 
 export type HubTelemetry = Partial<Pick<HubRecord, 'firmware' | 'batPercent' | 'schedule'>>;
 export type CameraTelemetry = Partial<
-  Pick<CameraRecord, 'model' | 'firmware' | 'batPercent' | 'sdFreeMB'>
+  Pick<
+    CameraRecord,
+    'model' | 'firmware' | 'batPercent' | 'sdFreeMB' | 'sdTotalMB' | 'sdCard' | 'sdError'
+  >
 >;
 
 /** Persistence boundary; implemented by DynamoDB in AWS and in memory for tests. */

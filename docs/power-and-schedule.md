@@ -69,7 +69,8 @@ effect, where each comes from, and the next planned read and check-in.
   fails when the camera is not reached after all attempts, when every camera
   session of the cycle ended with an error before it stored anything (each
   such session counts as an attempt), or when the camera has no SD card (no
-  further attempts in that cycle). A session that stored some media before an
+  further attempts in that cycle; the sync still runs, so that the app shows
+  the missing card). A session that stored some media before an
   error counts as a read: the sync runs, and the front ends show it as
   incomplete (`partial`). Failed check-ins stretch the check-in interval in
   the same way.

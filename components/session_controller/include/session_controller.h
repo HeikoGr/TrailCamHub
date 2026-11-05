@@ -36,10 +36,12 @@ typedef enum {
     SESSION_RESULT_CAMERA_SCANNED,
     /* Listing of the camera's media done (list_only); never synced. */
     SESSION_RESULT_CAMERA_LISTED,
-    /* Camera session (unless upload only) and backend sync done. */
+    /* Camera session (unless upload only) and backend sync done; see
+     * camera_partial and camera_no_card for how the camera session ended. */
     SESSION_RESULT_UPLINK_DONE,
     SESSION_RESULT_CAMERA_UNREACHABLE,
-    /* The camera reported an error for its media list (no SD card). */
+    /* The camera reported an error for its media list (no SD card) and no
+     * sync followed (none configured, or a listing). */
     SESSION_RESULT_CAMERA_NO_CARD,
     SESSION_RESULT_UPLINK_UNREACHABLE,
     /* Ended early by session_controller_request_stop(). */
@@ -58,15 +60,17 @@ typedef enum {
     SESSION_FRONT_END_RETRY_WAIT,
     /* Joining the home Wi-Fi or syncing with the backend. */
     SESSION_FRONT_END_UPLOADING,
-    /* Idle after a cycle with the result CAMERA_SCANNED or UPLINK_DONE. */
+    /* Idle after a cycle with the result CAMERA_SCANNED or UPLINK_DONE (and
+     * neither camera_partial nor camera_no_card). */
     SESSION_FRONT_END_FINISHED,
     /* Idle after a listing (CAMERA_LISTED); see listed_files. */
     SESSION_FRONT_END_LISTED,
     /* The same, but the camera session ended with an error after storing
      * some media (camera_partial). */
     SESSION_FRONT_END_PARTIAL,
-    /* Idle after CAMERA_UNREACHABLE, CAMERA_NO_CARD, UPLINK_UNREACHABLE or
-     * STOPPED; kept until the next cycle starts. */
+    /* Idle after CAMERA_UNREACHABLE, CAMERA_NO_CARD (or camera_no_card with
+     * a sync), UPLINK_UNREACHABLE or STOPPED; kept until the next cycle
+     * starts. */
     SESSION_FRONT_END_NOT_FOUND,
     SESSION_FRONT_END_NO_CARD,
     SESSION_FRONT_END_UPLOAD_FAILED,
@@ -98,6 +102,12 @@ typedef struct {
      */
     bool camera_ok;
     bool camera_partial;
+    /*
+     * The camera reported no SD card (its media list failed). The cycle still
+     * syncs, if configured, so its result may be UPLINK_DONE; the front-end
+     * phase is NO_CARD either way. Kept like camera_ok.
+     */
+    bool camera_no_card;
     bool sync_ok;
     /*
      * The cycle only lists the camera's media

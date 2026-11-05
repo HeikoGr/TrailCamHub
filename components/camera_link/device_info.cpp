@@ -29,38 +29,52 @@ bool parse_device_info(const std::string &json, DeviceInfo &out)
         out.sd_total_mb = n;
     if (json_find_int(json, "sdFreeMB", n))
         out.sd_free_mb = n;
+    if (json_find_string(json, "sdCard", s))
+        out.sd_card = parse_sd_card(s);
+    if (json_find_string(json, "sdError", s))
+        out.sd_error = s;
 
     return true;
 }
 
-namespace
+const char *sd_card_name(SdCard card)
 {
-std::string quoted(const std::string &text)
-{
-    std::string out = "\"";
-    for (char c : text) {
-        if (c == '"' || c == '\\') {
-            out.push_back('\\');
-        }
-        if (static_cast<unsigned char>(c) >= 0x20) {
-            out.push_back(c);
-        }
+    switch (card) {
+    case SdCard::present:
+        return "ok";
+    case SdCard::missing:
+        return "missing";
+    case SdCard::unknown:
+        break;
     }
-    return out + "\"";
+    return "";
 }
-}  // namespace
+
+SdCard parse_sd_card(const std::string &name)
+{
+    if (name == "ok")
+        return SdCard::present;
+    if (name == "missing")
+        return SdCard::missing;
+    return SdCard::unknown;
+}
 
 std::string serialize_device_info(const DeviceInfo &info)
 {
-    std::string out = "{\"devId\":" + quoted(info.dev_id) +
-                      ",\"modelName\":" + quoted(info.model_name) +
-                      ",\"fwVerName\":" + quoted(info.fw_version);
+    std::string out = "{\"devId\":" + json_quote(info.dev_id) +
+                      ",\"modelName\":" + json_quote(info.model_name) +
+                      ",\"fwVerName\":" + json_quote(info.fw_version);
     if (info.bat_percent >= 0)
         out += ",\"batPercent\":" + std::to_string(info.bat_percent);
     if (info.sd_total_mb >= 0)
         out += ",\"sdTotalMB\":" + std::to_string(info.sd_total_mb);
     if (info.sd_free_mb >= 0)
         out += ",\"sdFreeMB\":" + std::to_string(info.sd_free_mb);
+    if (info.sd_card != SdCard::unknown)
+        out +=
+            std::string(",\"sdCard\":\"") + sd_card_name(info.sd_card) + "\"";
+    if (!info.sd_error.empty())
+        out += ",\"sdError\":" + json_quote(info.sd_error);
     return out + "}";
 }
 
