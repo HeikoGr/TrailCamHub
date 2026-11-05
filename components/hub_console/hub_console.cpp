@@ -132,7 +132,12 @@ void on_status(const session_status_t *status, void *context)
     }
     s_printed_stopping = status->stopping;
     if (status->cycle_finished) {
-        event(std::string("done ") + status->last_result_name);
+        // "done uplink-done no-card": synced, but the camera has no SD card.
+        const bool no_card_synced =
+            status->camera_no_card &&
+            status->last_result != SESSION_RESULT_CAMERA_NO_CARD;
+        event(std::string("done ") + status->last_result_name +
+              (no_card_synced ? " no-card" : ""));
     }
 }
 

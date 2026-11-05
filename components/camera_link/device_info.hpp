@@ -11,6 +11,21 @@
 namespace camera::artemis
 {
 
+// The camera's SD card as the hub last saw it. The camera does not say so in
+// its device info: a media list that fails (getMediaListRet != 0) means no
+// card. Stored in camera.json as "sdCard": "ok" / "missing" (absent while
+// unknown) and reported in the check-in.
+enum class SdCard : std::uint8_t {
+    unknown,
+    present,  // the media list was read
+    missing,  // the media list failed (no card, or one the camera cannot use)
+};
+
+// "ok", "missing" or "" (unknown).
+const char *sd_card_name(SdCard card);
+// The inverse of sd_card_name(); anything else is unknown.
+SdCard parse_sd_card(const std::string &name);
+
 struct DeviceInfo {
     std::string dev_id;             // "devId" — stable camera identity
     std::string model_name;         // "modelName"
@@ -18,6 +33,9 @@ struct DeviceInfo {
     std::int64_t bat_percent = -1;  // "batPercent" (-1 = unknown)
     std::int64_t sd_total_mb = -1;  // "sdTotalMB"
     std::int64_t sd_free_mb = -1;   // "sdFreeMB"
+    // Not part of the camera's response; kept in the stored copy.
+    SdCard sd_card = SdCard::unknown;  // "sdCard"
+    std::string sd_error;              // "sdError": the camera's errorMsg
 };
 
 // Parses a device-info response. Returns false only if no device identity
@@ -26,7 +44,8 @@ struct DeviceInfo {
 bool parse_device_info(const std::string &json, DeviceInfo &out);
 
 // Writes the fields back in the 512 response format, so a stored copy can be
-// read with parse_device_info(). Unknown numbers (-1) are left out.
+// read with parse_device_info(). Unknown numbers (-1), an unknown SD card and
+// an empty sd_error are left out.
 std::string serialize_device_info(const DeviceInfo &info);
 
 }  // namespace camera::artemis

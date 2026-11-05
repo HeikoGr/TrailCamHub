@@ -21,6 +21,19 @@ export function batteryLevel(percent: number): BatteryLevel {
   return 'ok';
 }
 
+export type StorageLevel = 'ok' | 'low' | 'critical';
+
+/**
+ * How full the camera's SD card is: low below 2 GB or 10 % free, critical
+ * below 500 MB or 2 % free. The percentages only apply when the size is known.
+ */
+export function storageLevel(freeMB: number, totalMB?: number): StorageLevel {
+  const share = totalMB !== undefined && totalMB > 0 ? freeMB / totalMB : 1;
+  if (freeMB < 500 || share < 0.02) return 'critical';
+  if (freeMB < 2048 || share < 0.1) return 'low';
+  return 'ok';
+}
+
 export function formatStorage(megabytes: number): string {
   if (megabytes >= 1024) {
     return `${(megabytes / 1024).toFixed(1)} GB`;

@@ -232,6 +232,65 @@ describe('hub check-in with several cameras', () => {
   });
 });
 
+describe("the camera's SD card", () => {
+  const read = async (deps: Awaited<ReturnType<typeof setup>>['deps']) =>
+    body<Camera[]>(await handleRequest(appRequest('GET', '/v1/cameras'), deps)).find(
+      (c) => c.camId === CAM_ID,
+    );
+
+  it('is unknown until the hub reports it', async () => {
+    const { deps, hubKey } = await setup();
+    await handleRequest(hubRequest('/v1/device/checkin', hubKey, checkinBody), deps);
+    const cam = await read(deps);
+    expect(cam?.sdCard).toBe('unknown');
+    expect(cam?.sdError).toBeUndefined();
+  });
+
+  it('shows a missing card with the camera message until the card is back', async () => {
+    const { deps, hubKey } = await setup();
+    const report = (fields: Record<string, unknown>) =>
+      handleRequest(
+        hubRequest('/v1/device/checkin', hubKey, { cameras: [{ camId: CAM_ID, ...fields }] }),
+        deps,
+      );
+
+    await report({
+      sdCard: 'missing',
+      sdError: 'Memory card not exist',
+      sdFreeMB: 0,
+      sdTotalMB: 0,
+    });
+    expect(await read(deps)).toMatchObject({
+      sdCard: 'missing',
+      sdError: 'Memory card not exist',
+      sdFreeMB: 0,
+      sdTotalMB: 0,
+    });
+
+    // A check-in without the state (an older read) keeps it.
+    await report({ batPercent: 50 });
+    expect((await read(deps))?.sdCard).toBe('missing');
+
+    await report({ sdCard: 'ok', sdError: 'stale', sdFreeMB: 30000, sdTotalMB: 30436 });
+    const cam = await read(deps);
+    expect(cam).toMatchObject({ sdCard: 'ok', sdFreeMB: 30000, sdTotalMB: 30436 });
+    expect(cam?.sdError).toBeUndefined();
+  });
+
+  it('ignores unknown states', async () => {
+    const { deps, hubKey, store } = await setup();
+    await handleRequest(
+      hubRequest('/v1/device/checkin', hubKey, {
+        cameras: [{ camId: CAM_ID, sdCard: 'broken', sdError: 'x' }],
+      }),
+      deps,
+    );
+    const record = await store.getCamera(CAM_ID);
+    expect(record?.sdCard).toBeUndefined();
+    expect(record?.sdError).toBeUndefined();
+  });
+});
+
 describe('app API', () => {
   it('requires valid Telegram init data', async () => {
     const { deps } = await setup();

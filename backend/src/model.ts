@@ -57,6 +57,12 @@ export interface HubRecord {
   scheduleConfig?: ScheduleConfig;
 }
 
+/**
+ * The camera's SD card as the hub last saw it: `ok` when its media list was
+ * read, `missing` when the camera answered it with an error (no card).
+ */
+export type SdCardState = 'ok' | 'missing';
+
 export interface CameraRecord {
   camId: string;
   hubId: string;
@@ -65,6 +71,10 @@ export interface CameraRecord {
   firmware?: string;
   batPercent?: number;
   sdFreeMB?: number;
+  sdTotalMB?: number;
+  sdCard?: SdCardState;
+  /** The camera's error message for a missing card; empty when the card is fine. */
+  sdError?: string;
   /** When the hub last read the camera, Unix seconds. */
   lastSeen: number;
 }
@@ -106,6 +116,12 @@ export interface Camera {
   firmware: string;
   batPercent: number;
   sdFreeMB: number;
+  /** Size of the camera's SD card in MB; absent if unknown. */
+  sdTotalMB?: number;
+  /** `unknown` until the hub has read the camera's media list. */
+  sdCard: SdCardState | 'unknown';
+  /** The camera's error message when the card is missing. */
+  sdError?: string;
   hubBatPercent?: number;
   lastSeen: number;
   /** Last check-in of the hub, Unix seconds; 0 = never. */
@@ -152,6 +168,11 @@ export interface CameraReport {
   firmware?: string;
   batPercent?: number;
   sdFreeMB?: number;
+  sdTotalMB?: number;
+  /** `ok` or `missing` (see SdCardState); absent if the hub does not know. */
+  sdCard?: string;
+  /** With `missing`: the camera's error message, e.g. "Memory card not exist". */
+  sdError?: string;
   /**
    * Media not reported before (delta). The backend only adds entries, so
    * sending an item again is harmless.

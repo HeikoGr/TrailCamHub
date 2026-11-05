@@ -144,6 +144,18 @@ p {
   color: var(--danger);
 }
 
+.status__alert {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning) 15%, var(--bg));
+  font-size: 0.85rem;
+}
+
+.status__alert[data-level='critical'] {
+  background: color-mix(in srgb, var(--danger) 15%, var(--bg));
+}
+
 .section-title {
   margin: 20px 0 8px;
   font-size: 1rem;

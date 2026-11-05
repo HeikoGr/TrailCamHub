@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   batteryLevel,
+  storageLevel,
   canRequestVideo,
   formatCameraTime,
   formatDateTime,
@@ -35,6 +36,20 @@ describe('batteryLevel', () => {
     [0, 'critical'],
   ] as const)('%i %% is %s', (percent, level) => {
     expect(batteryLevel(percent)).toBe(level);
+  });
+});
+
+describe('storageLevel', () => {
+  it.each([
+    [28_412, 30_436, 'ok'],
+    [2_048, undefined, 'ok'],
+    [2_047, undefined, 'low'],
+    [3_000, 31_000, 'low'],
+    [499, undefined, 'critical'],
+    [600, 20_000, 'low'],
+    [600, 128_000, 'critical'],
+  ] as const)('%i MB of %s MB free is %s', (free, total, level) => {
+    expect(storageLevel(free, total)).toBe(level);
   });
 });
 

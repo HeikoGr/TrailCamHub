@@ -174,3 +174,26 @@ TEST_CASE("ack body is grouped by camera and skips empty cameras")
     empty.cameras = {idle};
     CHECK(ack_is_empty(empty));
 }
+
+TEST_CASE("check-in body carries the state of the camera's SD card")
+{
+    CheckinRequest request;
+    CameraReport missing;
+    missing.cam_id = "F4C15606ED3B";
+    missing.sd_free_mb = 0;
+    missing.sd_total_mb = 0;
+    missing.sd_card = "missing";
+    missing.sd_error = "Memory card not exist";
+    CameraReport ok;
+    ok.cam_id = "A1B2C3D4E5F6";
+    ok.sd_card = "ok";
+    ok.sd_error = "ignored";
+    request.cameras = {missing, ok};
+
+    CHECK(build_checkin_json(request) ==
+          "{\"hubFirmware\":\"\",\"cameras\":["
+          "{\"camId\":\"F4C15606ED3B\",\"sdFreeMB\":0,\"sdTotalMB\":0,"
+          "\"sdCard\":\"missing\",\"sdError\":\"Memory card not exist\","
+          "\"media\":[]},"
+          "{\"camId\":\"A1B2C3D4E5F6\",\"sdCard\":\"ok\",\"media\":[]}]}");
+}

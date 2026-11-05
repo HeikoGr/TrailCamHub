@@ -221,6 +221,15 @@ std::string build_checkin_json(const CheckinRequest &request)
         if (c.sd_free_mb >= 0) {
             out += ",\"sdFreeMB\":" + std::to_string(c.sd_free_mb);
         }
+        if (c.sd_total_mb >= 0) {
+            out += ",\"sdTotalMB\":" + std::to_string(c.sd_total_mb);
+        }
+        if (!c.sd_card.empty()) {
+            out += ",\"sdCard\":\"" + json_escape(c.sd_card) + "\"";
+            if (c.sd_card != "ok" && !c.sd_error.empty()) {
+                out += ",\"sdError\":\"" + json_escape(c.sd_error) + "\"";
+            }
+        }
         out += ",\"media\":[";
         bool first = true;
         for (const MediaRef &m : c.media) {

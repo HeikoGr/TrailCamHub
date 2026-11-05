@@ -159,6 +159,13 @@ bool load_camera_info(const std::string &camera_id,
 // has never been synced. False if there is no camera.json to update.
 bool mark_camera_synced(const std::string &camera_id, std::int64_t at);
 
+// Records in camera.json what the media list said about the camera's SD card
+// ("sdCard", and "sdError" with the camera's errorMsg; empty when the card is
+// fine). The state is kept when camera.json is rewritten at the next session
+// start. False if there is no camera.json to update.
+bool set_camera_sd_card(const std::string &camera_id,
+                        camera::artemis::SdCard card, const std::string &error);
+
 // Ids (sanitized directory names) of all cameras with a camera.json.
 std::vector<std::string> list_cameras();
 

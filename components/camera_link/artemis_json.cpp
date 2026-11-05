@@ -94,22 +94,41 @@ bool json_find_string(const std::string &json, const std::string &key,
     return false;  // unterminated string
 }
 
-std::string json_set_int(const std::string &json, const std::string &key,
-                         std::int64_t value)
+namespace
 {
-    const std::string field = "\"" + key + "\":" + std::to_string(value);
+
+// End of the value that starts after the colon at `colon`: a string literal
+// or a (signed) integer.
+size_t value_end(const std::string &json, size_t colon)
+{
+    size_t end = colon + 1;
+    while (end < json.size() && json[end] == ' ') {
+        end++;
+    }
+    if (end < json.size() && json[end] == '"') {
+        end++;
+        while (end < json.size() && json[end] != '"') {
+            end += json[end] == '\\' ? 2 : 1;
+        }
+        return end < json.size() ? end + 1 : json.size();
+    }
+    while (end < json.size() &&
+           (json[end] == '-' || (json[end] >= '0' && json[end] <= '9'))) {
+        end++;
+    }
+    return end;
+}
+
+std::string set_field(const std::string &json, const std::string &key,
+                      const std::string &field)
+{
     const std::string needle = "\"" + key + "\"";
     const size_t at = json.find(needle);
     if (at != std::string::npos) {
         size_t colon = json.find(':', at + needle.size());
         if (colon != std::string::npos) {
-            size_t end = colon + 1;
-            while (end < json.size() &&
-                   (json[end] == ' ' || json[end] == '-' ||
-                    (json[end] >= '0' && json[end] <= '9'))) {
-                end++;
-            }
-            return json.substr(0, at) + field + json.substr(end);
+            return json.substr(0, at) + field +
+                   json.substr(value_end(json, colon));
         }
     }
     const size_t close = json.rfind('}');
@@ -119,6 +138,34 @@ std::string json_set_int(const std::string &json, const std::string &key,
     const bool empty = json.find_first_not_of(" \t\r\n{") == close;
     return json.substr(0, close) + (empty ? "" : ",") + field +
            json.substr(close);
+}
+
+}  // namespace
+
+std::string json_set_int(const std::string &json, const std::string &key,
+                         std::int64_t value)
+{
+    return set_field(json, key, "\"" + key + "\":" + std::to_string(value));
+}
+
+std::string json_quote(const std::string &text)
+{
+    std::string out = "\"";
+    for (char c : text) {
+        if (c == '"' || c == '\\') {
+            out.push_back('\\');
+        }
+        if (static_cast<unsigned char>(c) >= 0x20) {
+            out.push_back(c);
+        }
+    }
+    return out + "\"";
+}
+
+std::string json_set_string(const std::string &json, const std::string &key,
+                            const std::string &value)
+{
+    return set_field(json, key, "\"" + key + "\":" + json_quote(value));
 }
 
 }  // namespace camera::artemis

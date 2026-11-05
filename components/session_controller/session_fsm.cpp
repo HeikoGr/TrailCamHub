@@ -50,6 +50,11 @@ bool Fsm::partial() const
     return partial_;
 }
 
+bool Fsm::no_card() const
+{
+    return no_card_;
+}
+
 Event session_end_event(bool ok, bool media_list_error,
                         std::uint32_t stored_items)
 {
@@ -116,11 +121,13 @@ Result Fsm::handle(Event event)
         if (event == Event::scan_requested) {
             attempt_ = 1;
             partial_ = false;
+            no_card_ = false;
             return transition(State::ble_activation, kResumeBle | kStartTimer,
                               config_.ble_activation_timeout_ms);
         }
         if (event == Event::upload_requested && uplink_enabled_) {
             partial_ = false;
+            no_card_ = false;
             return start_uplink(kNone);
         }
         break;
@@ -176,7 +183,12 @@ Result Fsm::handle(Event event)
                 return camera_failed(kDisconnectWifi);
             }
             if (event == Event::session_no_card) {
-                // Another attempt would end the same way.
+                // Another attempt would end the same way. The sync still
+                // runs, so that the backend shows the missing card.
+                no_card_ = true;
+                if (uplink_enabled_ && !listing_) {
+                    return start_uplink(kDisconnectWifi);
+                }
                 return transition(State::idle, kDisconnectWifi, 0,
                                   Outcome::camera_no_card);
             }
@@ -301,7 +313,7 @@ const char *to_string(Outcome outcome)
 }
 
 FrontEndPhase front_end_phase(State state, Outcome last_outcome,
-                              bool camera_partial)
+                              bool camera_partial, bool camera_no_card)
 {
     switch (state) {
     case State::idle:
@@ -310,6 +322,9 @@ FrontEndPhase front_end_phase(State state, Outcome last_outcome,
             return FrontEndPhase::idle;
         case Outcome::camera_scanned:
         case Outcome::uplink_done:
+            if (camera_no_card) {
+                return FrontEndPhase::no_card;
+            }
             return camera_partial ? FrontEndPhase::partial
                                   : FrontEndPhase::finished;
         case Outcome::camera_listed:

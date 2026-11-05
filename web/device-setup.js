@@ -273,6 +273,9 @@
           addLog("event", "Stopping — closing the camera session");
         } else if (event === "done") {
           addLog(details[0].endsWith("unreachable") ? "error" : "ok", DONE_TEXT[details[0]] ?? details[0]);
+          if (details.includes("no-card")) {
+            addLog("error", DONE_TEXT["camera-no-card"]);
+          }
         } else {
           addLog(event === "uplink" && details[0] === "failed" ? "error" : "event", text);
         }

@@ -230,10 +230,11 @@ session_front_end_phase_t front_end_of(session::FrontEndPhase phase)
 // Sets the front-end phase of `status` for `state`.
 void set_front_end_phase(session_status_t &status, session::State state,
                          session::Outcome last_outcome,
-                         bool camera_partial = false)
+                         bool camera_partial = false,
+                         bool camera_no_card = false)
 {
-    const session::FrontEndPhase phase =
-        session::front_end_phase(state, last_outcome, camera_partial);
+    const session::FrontEndPhase phase = session::front_end_phase(
+        state, last_outcome, camera_partial, camera_no_card);
     status.front_end_phase = front_end_of(phase);
     status.front_end_phase_name = session::to_string(phase);
 }
@@ -261,6 +262,7 @@ void publish_status(const session::Result &result)
     }
     s_status.camera_ok = s_camera_ok;
     s_status.camera_partial = s_fsm.partial();
+    s_status.camera_no_card = s_fsm.no_card();
     s_status.listed_files = s_listed_files;
     s_status.list_only = s_list_only;
     s_status.sync_ok = s_sync_ok;
@@ -269,7 +271,8 @@ void publish_status(const session::Result &result)
         s_status.last_result = result_of(result.outcome);
         s_status.last_result_name = session::to_string(result.outcome);
     }
-    set_front_end_phase(s_status, result.next, s_last_outcome, s_fsm.partial());
+    set_front_end_phase(s_status, result.next, s_last_outcome, s_fsm.partial(),
+                        s_fsm.no_card());
     // The SSID belongs to the camera part of the cycle. It stays set after the
     // cycle ends, so a front end can show it with the result until the next
     // cycle starts (cleared above).

@@ -440,7 +440,6 @@ TEST_CASE("a session that stored media before failing is synced, as partial")
 TEST_CASE("a camera without an SD card ends the cycle without retries")
 {
     Fsm fsm(kConfig);
-    fsm.set_uplink_enabled(true);
     reach_session(fsm);
 
     const Result result = fsm.handle(Event::session_no_card);
@@ -449,8 +448,37 @@ TEST_CASE("a camera without an SD card ends the cycle without retries")
     CHECK_FALSE(has(result, kConnectHomeWifi));
     CHECK(result.outcome == Outcome::camera_no_card);
     CHECK(std::string(to_string(result.outcome)) == "camera-no-card");
+    CHECK(fsm.no_card());
     CHECK(front_end_phase(fsm.state(), result.outcome) ==
           FrontEndPhase::no_card);
+}
+
+TEST_CASE("a camera without an SD card is still synced, to report the card")
+{
+    Fsm fsm(kConfig);
+    fsm.set_uplink_enabled(true);
+    reach_session(fsm);
+
+    Result result = fsm.handle(Event::session_no_card);
+    CHECK(result.next == State::uplink_join);
+    CHECK(has(result, kDisconnectWifi));
+    CHECK(has(result, kConnectHomeWifi));
+    CHECK(result.outcome == Outcome::none);
+    CHECK(fsm.no_card());
+    CHECK_FALSE(fsm.partial());
+
+    fsm.handle(Event::wifi_connected);
+    result = fsm.handle(Event::uplink_done);
+    CHECK(result.outcome == Outcome::uplink_done);
+    // The front ends still show the missing card.
+    CHECK(front_end_phase(fsm.state(), result.outcome, fsm.partial(),
+                          fsm.no_card()) == FrontEndPhase::no_card);
+    CHECK(front_end_phase(fsm.state(), result.outcome) ==
+          FrontEndPhase::finished);
+
+    // The next cycle starts without the flag.
+    fsm.handle(Event::scan_requested);
+    CHECK_FALSE(fsm.no_card());
 }
 
 TEST_CASE("a stop wins over how the session ended")
