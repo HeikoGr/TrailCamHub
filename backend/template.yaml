@@ -25,6 +25,19 @@ Parameters:
       Optional: name of an SSM SecureString parameter holding the bot token, for
       accounts where Parameter Store is available. Used only if
       TelegramBotToken is empty.
+  MiniAppUrl:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^https://\S+$'
+    Description: >-
+      URL of the Telegram Mini App, for the "Open app" buttons in bot messages.
+      Empty: messages come without that button.
+  DefaultTimeZone:
+    Type: String
+    Default: Europe/Berlin
+    Description: >-
+      Time zone of a user's quiet hours until they set their own with
+      /timezone.
   ThumbnailRetentionDays:
     Type: Number
     Default: 365
@@ -39,7 +52,8 @@ Globals:
     Runtime: nodejs22.x
     Architectures: [arm64]
     MemorySize: 256
-    Timeout: 15
+    # Room for the bot messages sent while acknowledging a hub's uploads.
+    Timeout: 30
     Tracing: Disabled
 
 Resources:
@@ -64,6 +78,10 @@ Resources:
         PointInTimeRecoveryEnabled: false
       SSESpecification:
         SSEEnabled: true
+      # Expired pairing codes (PAIR#…) are deleted by DynamoDB.
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
 
   MediaBucket:
     Type: AWS::S3::Bucket
@@ -132,13 +150,15 @@ Resources:
     Properties:
       CodeUri: .
       Handler: handler.handler
-      Description: TrailCamHub API (app + device endpoints)
+      Description: TrailCamHub API (app, device and Telegram webhook endpoints)
       Environment:
         Variables:
           TABLE_NAME: !Ref Table
           MEDIA_BUCKET: !Ref MediaBucket
           TELEGRAM_BOT_TOKEN: !Ref TelegramBotToken
           TELEGRAM_BOT_TOKEN_PARAM: !Ref TelegramBotTokenParameter
+          APP_URL: !Ref MiniAppUrl
+          DEFAULT_TIME_ZONE: !Ref DefaultTimeZone
           NODE_OPTIONS: --enable-source-maps
       LoggingConfig:
         LogGroup: !Ref ApiLogGroup

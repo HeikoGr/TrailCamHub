@@ -5,6 +5,7 @@ import { handleRequest, type Deps } from './api';
 import type { ApiRequest } from './http';
 import { S3MediaStorage } from './storage';
 import { DynamoStore } from './store/dynamo';
+import { HttpTelegramApi } from './telegram/api';
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -49,6 +50,11 @@ function getDeps(): Deps {
     storage: new S3MediaStorage(requireEnv('MEDIA_BUCKET')),
     botToken: () => botToken(),
     now: () => Math.floor(Date.now() / 1000),
+    telegram: {
+      api: new HttpTelegramApi(() => botToken()),
+      appUrl: process.env.APP_URL?.trim() || undefined,
+      defaultTimeZone: process.env.DEFAULT_TIME_ZONE?.trim() || 'Europe/Berlin',
+    },
   };
   return deps;
 }
@@ -78,6 +84,6 @@ export function toApiRequest(event: APIGatewayProxyEventV2): ApiRequest {
 export async function handler(
   event: APIGatewayProxyEventV2 | AdminEvent,
 ): Promise<APIGatewayProxyStructuredResultV2 | AdminResult> {
-  if (isAdminEvent(event)) return handleAdmin(event, getDeps().store);
+  if (isAdminEvent(event)) return handleAdmin(event, getDeps());
   return handleRequest(toApiRequest(event as APIGatewayProxyEventV2), getDeps());
 }

@@ -105,6 +105,31 @@ export interface CommandRecord {
   error?: string;
 }
 
+/** Bot settings of a Telegram user (in a private chat, chat id = user id). */
+export interface UserSettings {
+  /** Messages about new recordings. */
+  notify: boolean;
+  /**
+   * Quiet hours in minutes after midnight, in `timeZone`: messages in this
+   * window arrive without sound. Absent (or equal) = no quiet hours. The
+   * window may wrap around midnight (from 22:00 to 07:00).
+   */
+  quietFrom?: number;
+  quietTo?: number;
+  /** IANA time zone for the quiet hours, e.g. "Europe/Berlin". */
+  timeZone: string;
+}
+
+/** A one-time code that links the Telegram user who redeems it to a hub. */
+export interface PairingCode {
+  code: string;
+  hubId: string;
+  /** Unix seconds; the code is refused afterwards (and DynamoDB deletes it). */
+  expiresAt: number;
+  /** Telegram user who created it with /invite; absent for admin or hub codes. */
+  createdBy?: number;
+}
+
 // ---- App API ---------------------------------------------------------------
 
 export interface Camera {

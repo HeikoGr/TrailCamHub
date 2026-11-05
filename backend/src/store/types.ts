@@ -3,7 +3,9 @@ import type {
   CommandRecord,
   HubRecord,
   MediaRecord,
+  PairingCode,
   ScheduleConfig,
+  UserSettings,
   VideoState,
 } from '../model';
 
@@ -32,9 +34,18 @@ export interface Store {
   updateCamera(camId: string, telemetry: CameraTelemetry, lastSeen: number): Promise<void>;
   listHubCameraIds(hubId: string): Promise<string[]>;
 
+  /** Links both ways: the user sees the hub, the hub knows whom to notify. */
   linkUser(userId: number, hubId: string): Promise<void>;
   listUserHubIds(userId: number): Promise<string[]>;
   isLinked(userId: number, hubId: string): Promise<boolean>;
+  listHubUserIds(hubId: string): Promise<number[]>;
+
+  getUserSettings(userId: number): Promise<UserSettings | undefined>;
+  putUserSettings(userId: number, settings: UserSettings): Promise<void>;
+
+  putPairingCode(pairing: PairingCode): Promise<void>;
+  /** Removes the code and returns it, so it can be redeemed only once. */
+  takePairingCode(code: string): Promise<PairingCode | undefined>;
 
   listMedia(camId: string): Promise<MediaRecord[]>;
   getMedia(camId: string, mediaId: number): Promise<MediaRecord | undefined>;

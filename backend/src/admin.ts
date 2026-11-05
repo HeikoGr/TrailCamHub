@@ -1,4 +1,6 @@
+import type { Deps } from './api';
 import { generateDeviceKey } from './auth/device';
+import { ADMIN_CODE_TTL_S, createPairingCode, pairingLink } from './pairing';
 import type { Store } from './store/types';
 
 /**
@@ -20,11 +22,24 @@ export interface RegisterHubEvent {
   rotateKey?: boolean;
 }
 
-export type AdminEvent = RegisterHubEvent;
+/** A one-time link that pairs whoever opens it with the hub (see pairing.ts). */
+export interface CreatePairingCodeEvent {
+  admin: 'createPairingCode';
+  hubId: string;
+  /** Validity in hours, 1-720; default one week. */
+  ttlHours?: number;
+}
 
-export type AdminResult =
+export type AdminEvent = RegisterHubEvent | CreatePairingCodeEvent;
+
+type Failure = { ok: false; error: string };
+export type RegisterHubResult =
   | { ok: true; created: boolean; key?: string; linkedUsers: number[] }
-  | { ok: false; error: string };
+  | Failure;
+export type PairingResult = { ok: true; code: string; link?: string; expiresAt: number } | Failure;
+export type AdminResult = RegisterHubResult | PairingResult;
+
+export type AdminDeps = Pick<Deps, 'store' | 'now' | 'telegram'>;
 
 const HUB_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -34,11 +49,38 @@ export function isAdminEvent(event: unknown): event is { admin: unknown } {
   );
 }
 
-export async function handleAdmin(event: { admin: unknown }, store: Store): Promise<AdminResult> {
-  if (event.admin !== 'registerHub') {
-    return { ok: false, error: `unknown admin task ${JSON.stringify(event.admin)}` };
+export async function handleAdmin(
+  event: { admin: unknown },
+  deps: AdminDeps,
+): Promise<AdminResult> {
+  if (event.admin === 'registerHub') return registerHub(event as RegisterHubEvent, deps.store);
+  if (event.admin === 'createPairingCode') {
+    return createPairing(event as CreatePairingCodeEvent, deps);
   }
-  return registerHub(event as RegisterHubEvent, store);
+  return { ok: false, error: `unknown admin task ${JSON.stringify(event.admin)}` };
+}
+
+/**
+ * Creates a pairing code for an existing hub. The link needs the bot's
+ * username; without a configured bot only the code is returned.
+ */
+export async function createPairing(
+  event: CreatePairingCodeEvent,
+  deps: AdminDeps,
+): Promise<PairingResult> {
+  const { hubId, ttlHours } = event;
+  if (typeof hubId !== 'string' || !HUB_ID.test(hubId) || !(await deps.store.getHub(hubId))) {
+    return { ok: false, error: `unknown hub ${JSON.stringify(hubId)}` };
+  }
+  if (ttlHours !== undefined && !(Number.isInteger(ttlHours) && ttlHours >= 1 && ttlHours <= 720)) {
+    return { ok: false, error: 'ttlHours must be 1-720' };
+  }
+  const ttlS = ttlHours === undefined ? ADMIN_CODE_TTL_S : ttlHours * 60 * 60;
+  const pairing = await createPairingCode(deps.store, hubId, ttlS, deps.now());
+  const link = deps.telegram
+    ? pairingLink(await deps.telegram.api.botUsername(), pairing.code)
+    : undefined;
+  return { ok: true, code: pairing.code, link, expiresAt: pairing.expiresAt };
 }
 
 /**
@@ -46,7 +88,10 @@ export async function handleAdmin(event: { admin: unknown }, store: Store): Prom
  * it, `rotateKey` issues a new key, `users` links Telegram users. The key is
  * returned only when it was created now; only its hash is stored.
  */
-export async function registerHub(event: RegisterHubEvent, store: Store): Promise<AdminResult> {
+export async function registerHub(
+  event: RegisterHubEvent,
+  store: Store,
+): Promise<RegisterHubResult> {
   const { hubId, name, rotateKey = false } = event;
   const users = event.users ?? [];
   if (typeof hubId !== 'string' || !HUB_ID.test(hubId)) {
