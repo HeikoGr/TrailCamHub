@@ -34,4 +34,32 @@ bool contains_uuid16(const std::uint8_t *data, std::size_t data_len,
 bool name_in_allowlist(const std::uint8_t *name, std::size_t name_len,
                        const char *const *allowlist, std::size_t allowlist_len);
 
+// Returns true if `name` (not NUL-terminated) starts with one of `prefixes`
+// and is longer than it.
+bool name_has_prefix(const std::uint8_t *name, std::size_t name_len,
+                     const char *const *prefixes, std::size_t prefixes_len);
+
+// The BLE addresses of the cameras done in the current scan, so that the
+// next activation picks another camera. Pure logic; addresses are the 6
+// bytes of the address plus its type.
+class AddressSet
+{
+  public:
+    static constexpr std::size_t kMax = 8;
+
+    void clear();
+    // False if the set is full (the address is then not skipped).
+    bool add(std::uint8_t type, const std::uint8_t address[6]);
+    bool contains(std::uint8_t type, const std::uint8_t address[6]) const;
+    std::size_t size() const;
+
+  private:
+    struct Entry {
+        std::uint8_t type;
+        std::uint8_t address[6];
+    };
+    Entry entries_[kMax] = {};
+    std::size_t size_ = 0;
+};
+
 }  // namespace camera::ble

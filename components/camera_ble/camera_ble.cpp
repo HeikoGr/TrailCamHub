@@ -67,6 +67,11 @@ static camera_ble_link_cb_t s_link_callback;
 // Last state reported to s_link_callback.
 static bool s_link_active;
 static char s_device_name[MAX_BLE_DEVICE_NAME_LEN];
+// Cameras done in the current scan (skipped), and the last camera a
+// connection was set up to. Kept while the stack is released.
+static camera::ble::AddressSet s_done;
+static ble_addr_t s_last_camera;
+static bool s_have_last_camera;
 
 static GattProfile s_profile;
 static size_t s_discovery_service_index;
@@ -168,7 +173,8 @@ static void start_scan(void)
         return;
     }
     s_scanning = true;
-    ESP_LOGI(TAG, "Scanning for BLE camera %s", CAMERA_BLE_TARGET_NAME);
+    ESP_LOGI(TAG, "Scanning for BLE cameras %s* (%u done in this scan)",
+             CAMERA_BLE_NAME_PREFIX, (unsigned)s_done.size());
 }
 
 // Reports the start and the end of a camera connection, once each.
@@ -211,7 +217,8 @@ static void handle_advertisement(const struct ble_gap_disc_desc *disc)
     bool connectable = disc->event_type == BLE_HCI_ADV_RPT_EVTYPE_ADV_IND ||
                        disc->event_type == BLE_HCI_ADV_RPT_EVTYPE_DIR_IND;
     if (!s_activation_enabled || !connectable || s_connecting ||
-        !camera_ble_is_candidate_advertisement(disc->data, disc->length_data)) {
+        !camera_ble_is_candidate_advertisement(disc->data, disc->length_data) ||
+        s_done.contains(disc->addr.type, disc->addr.val)) {
         return;
     }
 
@@ -230,6 +237,8 @@ static void handle_advertisement(const struct ble_gap_disc_desc *disc)
     ble_gap_disc_cancel();
     s_scanning = false;
     set_link_active(true);
+    s_last_camera = disc->addr;
+    s_have_last_camera = true;
     int rc = ble_gap_connect(s_own_addr_type, &disc->addr, CONNECT_TIMEOUT_MS,
                              NULL, gap_event_handler, NULL);
     if (rc != 0) {
@@ -490,8 +499,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISC_COMPLETE:
         s_scanning = false;
         if (s_activation_enabled && !s_connecting) {
-            ESP_LOGI(TAG, "%s not found; restarting scan",
-                     CAMERA_BLE_TARGET_NAME);
+            ESP_LOGI(TAG, "No camera found; restarting scan");
         }
         start_scan();
         break;
@@ -526,7 +534,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg)
         camera_ble_protocol_reset_response();
         connection_ended();
         if (s_activation_enabled) {
-            ESP_LOGI(TAG, "Restarting scan for %s", CAMERA_BLE_TARGET_NAME);
+            ESP_LOGI(TAG, "Restarting the scan for cameras");
         }
         start_scan();
         break;
@@ -691,9 +699,43 @@ esp_err_t camera_ble_start(camera_ble_credentials_cb_t on_credentials)
                  "Payload is empty; this run will not write to the camera");
     }
     snprintf(s_device_name, sizeof(s_device_name), "unknown");
-    ESP_LOGI(TAG, "BLE camera activation ready; target camera is %s",
-             CAMERA_BLE_TARGET_NAME);
+    ESP_LOGI(TAG, "BLE camera activation ready; cameras are %s*",
+             CAMERA_BLE_NAME_PREFIX);
     return ESP_OK;
+}
+
+void camera_ble_clear_done(void)
+{
+    BleLock lock;
+    s_done.clear();
+    s_have_last_camera = false;
+}
+
+void camera_ble_mark_done(void)
+{
+    BleLock lock;
+    if (!s_have_last_camera) {
+        return;
+    }
+    const uint8_t *a = s_last_camera.val;
+    if (s_done.add(s_last_camera.type, a)) {
+        ESP_LOGI(TAG,
+                 "Camera %02X:%02X:%02X:%02X:%02X:%02X done; skipped for the "
+                 "rest of this scan",
+                 a[5], a[4], a[3], a[2], a[1], a[0]);
+    } else {
+        ESP_LOGW(TAG, "Too many cameras in one scan; one may be read again");
+    }
+    s_have_last_camera = false;
+}
+
+void camera_ble_last_name(char *out, size_t size)
+{
+    if (out == NULL || size == 0) {
+        return;
+    }
+    BleLock lock;
+    snprintf(out, size, "%s", s_device_name);
 }
 
 void camera_ble_set_link_callback(camera_ble_link_cb_t callback)

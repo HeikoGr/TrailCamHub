@@ -148,9 +148,9 @@ request (and TLS handshake) however many cameras there are — important over LT
 
    The backend checks S3 before marking a thumbnail as present, and only then does
    it appear in the app. Commands are re-sent at every check-in until acknowledged.
-   A hub acknowledges `readCamera` at the check-in after it has tried the read
-   (`done` or `failed`); it reads the camera right after the check-in that brought
-   the command.
+   A hub acknowledges `readCamera` at the check-in after it has tried the read:
+   `done` if that scan read the camera, `failed` if it did not. It scans (all its
+   cameras) right after the check-in that brought the command.
 
 ### Hub schedule
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -44,6 +45,14 @@ uint32_t camera_protocol_stored_items(void);
 
 /* Files reported by the last listing (camera_protocol_set_list_only()). */
 uint32_t camera_protocol_listed_files(void);
+
+/*
+ * Copies the id of the camera of the last camera_protocol_run() into `out`:
+ * its devId, sanitized as for its directory on the SD card and as the
+ * backend knows it. Empty if the camera did not report its device info.
+ * Call after camera_protocol_run() returned.
+ */
+void camera_protocol_last_camera_id(char *out, size_t size);
 
 /*
  * Battery level in percent that the camera reported in the last session

@@ -37,7 +37,9 @@ const char *TAG = "trailcamhub_schedule";
 const char *kNamespace = "schedule";
 const char *kRemotePlanKey = "plan";
 const char *kRemoteCheckinKey = "checkin_min";
-constexpr std::uint32_t kMagic = 0x54434853;  // "TCHS"
+// Changed with the layout of RtcData: "TCH2" since read requests carry a
+// camera id.
+constexpr std::uint32_t kMagic = 0x54434832;
 
 // Everything that has to survive deep sleep.
 struct RtcData {
@@ -363,10 +365,16 @@ void on_cycle_started(bool camera)
     cycle_started(s_rtc.state, camera, now());
 }
 
-void on_camera_result(bool ok)
+void on_camera_read(const std::string &cam_id)
 {
     Lock lock;
-    s_rtc.reads.on_camera_result(ok);
+    s_rtc.reads.on_camera_read(cam_id);
+}
+
+void on_camera_part_ended()
+{
+    Lock lock;
+    s_rtc.reads.on_camera_part_ended();
 }
 
 void on_cycle_finished(const CycleEnd &end)
@@ -384,19 +392,21 @@ void set_camera_battery(int percent)
     s_rtc.state.camera_battery = percent;
 }
 
-ReadRequests::Reply on_read_command(const std::string &id)
+ReadRequests::Reply on_read_command(const std::string &id,
+                                    const std::string &cam_id)
 {
     bool is_new = false;
     ReadRequests::Reply reply;
     {
         Lock lock;
-        reply = s_rtc.reads.on_command(id, &is_new);
+        reply = s_rtc.reads.on_command(id, cam_id, &is_new);
         if (is_new) {
             s_rtc.state.camera_requested = true;
         }
     }
     if (is_new) {
-        ESP_LOGI(TAG, "The backend asks for a camera read (%s)", id.c_str());
+        ESP_LOGI(TAG, "The backend asks for a read of camera %s (%s)",
+                 cam_id.c_str(), id.c_str());
         changed();
     }
     return reply;

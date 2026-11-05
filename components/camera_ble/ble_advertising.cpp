@@ -77,4 +77,55 @@ bool name_in_allowlist(const std::uint8_t *name, std::size_t name_len,
     return false;
 }
 
+bool name_has_prefix(const std::uint8_t *name, std::size_t name_len,
+                     const char *const *prefixes, std::size_t prefixes_len)
+{
+    if (name == nullptr || prefixes == nullptr) {
+        return false;
+    }
+    for (std::size_t i = 0; i < prefixes_len; i++) {
+        const std::size_t len = std::strlen(prefixes[i]);
+        if (name_len > len && std::memcmp(name, prefixes[i], len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void AddressSet::clear()
+{
+    size_ = 0;
+}
+
+bool AddressSet::add(std::uint8_t type, const std::uint8_t address[6])
+{
+    if (contains(type, address)) {
+        return true;
+    }
+    if (size_ >= kMax) {
+        return false;
+    }
+    entries_[size_].type = type;
+    std::memcpy(entries_[size_].address, address, 6);
+    size_++;
+    return true;
+}
+
+bool AddressSet::contains(std::uint8_t type,
+                          const std::uint8_t address[6]) const
+{
+    for (std::size_t i = 0; i < size_; i++) {
+        if (entries_[i].type == type &&
+            std::memcmp(entries_[i].address, address, 6) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::size_t AddressSet::size() const
+{
+    return size_;
+}
+
 }  // namespace camera::ble
