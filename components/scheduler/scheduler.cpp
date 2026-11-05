@@ -19,7 +19,6 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
-#include "camera_protocol.h"
 #include "schedule_state.hpp"
 #include "sd_log.h"
 #include "session_controller.h"
@@ -40,7 +39,9 @@ TaskHandle_t s_task;
 // Only touched by the session controller task (status listener).
 session_phase_t s_last_phase = SESSION_PHASE_IDLE;
 bool s_session_reached;
-std::atomic<bool> s_battery_pending;
+// Lowest battery of the cameras read in the last cycle; -1: none to store.
+std::atomic<int> s_pending_battery{-1};
+int s_cycle_battery = -1;
 
 void wake_task()
 {
@@ -74,31 +75,49 @@ void on_status(const session_status_t *status, void *context)
         status->phase != SESSION_PHASE_IDLE) {
         schedule::on_cycle_started(camera_phase(status->phase));
         s_session_reached = false;
+        s_cycle_battery = -1;
     }
     if (status->phase == SESSION_PHASE_CAMERA_SESSION) {
         s_session_reached = true;
     }
+    // Each camera read answers the read requests for it, and its battery
+    // counts for the low-battery stretch (the weakest camera decides).
+    if (status->camera_finished && status->cameras_done >= 1 &&
+        status->cameras_done <= SESSION_MAX_CAMERA_RESULTS) {
+        const session_camera_t &camera =
+            status->cameras[status->cameras_done - 1];
+        if ((camera.result == SESSION_CAMERA_READ ||
+             camera.result == SESSION_CAMERA_PARTIAL) &&
+            camera.cam_id[0] != '\0') {
+            schedule::on_camera_read(camera.cam_id);
+        }
+        if (camera.bat_percent >= 0 && camera.bat_percent <= 100 &&
+            (s_cycle_battery < 0 || camera.bat_percent < s_cycle_battery)) {
+            s_cycle_battery = camera.bat_percent;
+        }
+    }
     const bool stopped =
         status->cycle_finished && status->last_result == SESSION_RESULT_STOPPED;
-    // The camera part ends with the start of the sync or with the cycle. A
-    // session that ended with an error before storing anything, or found no
-    // SD card in the camera, is not a read (camera_ok is false).
+    // The camera part ends with the start of the sync or with the cycle. The
+    // read requests of cameras it did not read have failed then.
     if (camera_phase(s_last_phase) && !camera_phase(status->phase) &&
         !stopped) {
-        schedule::on_camera_result(s_session_reached && status->camera_ok);
-        if (s_session_reached) {
-            s_battery_pending = true;
+        schedule::on_camera_part_ended();
+        if (s_cycle_battery >= 0) {
+            s_pending_battery = s_cycle_battery;
         }
     }
     if (status->cycle_finished) {
         schedule::CycleEnd end;
+        // A camera was read (fully or in part). A session that ended with an
+        // error before storing anything, or found no SD card, is no read.
         end.camera_ok = s_session_reached && status->camera_ok && !stopped;
-        // Backs off the next reads; a camera without an SD card would only
-        // spend its battery on them.
+        // Backs off the next reads when no camera was read; a camera without
+        // an SD card would only spend its battery on them.
         end.camera_failed =
             status->last_result == SESSION_RESULT_CAMERA_UNREACHABLE ||
             status->last_result == SESSION_RESULT_CAMERA_NO_CARD ||
-            (status->camera_no_card && !stopped);
+            (status->camera_no_card && status->cameras_read == 0 && !stopped);
         end.sync_attempted =
             status->last_result == SESSION_RESULT_UPLINK_DONE ||
             status->last_result == SESSION_RESULT_UPLINK_UNREACHABLE;
@@ -187,11 +206,9 @@ void scheduler_task(void *arg)
     }
 
     while (true) {
-        if (s_battery_pending.exchange(false)) {
-            const int battery = camera_protocol_last_battery_percent();
-            if (battery >= 0) {
-                schedule::set_camera_battery(battery);
-            }
+        const int battery = s_pending_battery.exchange(-1);
+        if (battery >= 0) {
+            schedule::set_camera_battery(battery);
         }
         std::uint32_t wait_ms = SCHEDULER_MAX_WAIT_MS;
         session_status_t status;

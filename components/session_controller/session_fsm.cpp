@@ -8,6 +8,35 @@ Fsm::Fsm(const Config &config) : config_(config)
     if (config_.max_attempts == 0) {
         config_.max_attempts = 1;
     }
+    if (config_.max_cameras == 0) {
+        config_.max_cameras = 1;
+    }
+}
+
+void Fsm::set_time_ms(std::uint32_t now_ms)
+{
+    now_ms_ = now_ms;
+}
+
+std::uint32_t Fsm::cameras_done() const
+{
+    return cameras_done_;
+}
+
+std::uint32_t Fsm::cameras_read() const
+{
+    return cameras_read_;
+}
+
+bool Fsm::searching_next() const
+{
+    return searching_next_;
+}
+
+bool Fsm::budget_spent() const
+{
+    return config_.camera_budget_ms != 0 &&
+           now_ms_ - cycle_started_ms_ >= config_.camera_budget_ms;
 }
 
 State Fsm::state() const
@@ -73,11 +102,13 @@ Event session_end_event(bool ok, bool media_list_error,
 Result Fsm::transition(State next, std::uint32_t actions,
                        std::uint32_t timer_ms, Outcome outcome)
 {
-    const Result result = {state_, next, actions, timer_ms, true, outcome};
+    const Result result = {state_, next,    actions,           timer_ms,
+                           true,   outcome, CameraResult::none};
     state_ = next;
     if (next == State::idle) {
         attempt_ = 0;
         stop_pending_ = false;
+        searching_next_ = false;
     }
     return result;
 }
@@ -88,7 +119,67 @@ Result Fsm::camera_failed(std::uint32_t actions)
         return transition(State::backoff, actions | kStartTimer,
                           config_.retry_delay_ms);
     }
-    return transition(State::idle, actions, 0, Outcome::camera_unreachable);
+    if (camera_found_) {
+        // Skip this camera; the others may still answer.
+        return camera_ended(CameraResult::failed, actions);
+    }
+    return cameras_finished(actions);
+}
+
+// A camera is done: count it and go on with the next one.
+Result Fsm::camera_ended(CameraResult result, std::uint32_t actions)
+{
+    cameras_done_++;
+    switch (result) {
+    case CameraResult::read:
+        cameras_read_++;
+        break;
+    case CameraResult::partial:
+        cameras_read_++;
+        partial_ = true;
+        break;
+    case CameraResult::no_card:
+        no_card_ = true;
+        break;
+    case CameraResult::failed:
+    case CameraResult::none:
+        break;
+    }
+    return next_camera(actions | kExcludeCamera, result);
+}
+
+Result Fsm::next_camera(std::uint32_t actions, CameraResult result)
+{
+    // A listing shows the media of one camera.
+    if (listing_ || cameras_done_ >= config_.max_cameras || budget_spent()) {
+        return cameras_finished(actions, result);
+    }
+    attempt_ = 1;
+    camera_found_ = false;
+    searching_next_ = true;
+    Result next =
+        transition(State::ble_activation, actions | kResumeBle | kStartTimer,
+                   config_.next_camera_timeout_ms);
+    next.camera_result = result;
+    return next;
+}
+
+// The camera part is over: sync what was read, or report why nothing was.
+Result Fsm::cameras_finished(std::uint32_t actions, CameraResult result)
+{
+    Result next;
+    if (cameras_read_ > 0) {
+        next = camera_done(actions);
+    } else if (no_card_ && uplink_enabled_ && !listing_) {
+        // Sync anyway, so that the backend shows the missing card.
+        next = start_uplink(actions);
+    } else if (no_card_) {
+        next = transition(State::idle, actions, 0, Outcome::camera_no_card);
+    } else {
+        next = transition(State::idle, actions, 0, Outcome::camera_unreachable);
+    }
+    next.camera_result = result;
+    return next;
 }
 
 Result Fsm::camera_done(std::uint32_t actions)
@@ -122,24 +213,38 @@ Result Fsm::handle(Event event)
             attempt_ = 1;
             partial_ = false;
             no_card_ = false;
-            return transition(State::ble_activation, kResumeBle | kStartTimer,
+            cameras_done_ = 0;
+            cameras_read_ = 0;
+            camera_found_ = false;
+            searching_next_ = false;
+            cycle_started_ms_ = now_ms_;
+            return transition(State::ble_activation,
+                              kClearExcludedCameras | kResumeBle | kStartTimer,
                               config_.ble_activation_timeout_ms);
         }
         if (event == Event::upload_requested && uplink_enabled_) {
             partial_ = false;
             no_card_ = false;
+            cameras_done_ = 0;
+            cameras_read_ = 0;
             return start_uplink(kNone);
         }
         break;
 
     case State::ble_activation:
         if (event == Event::credentials_received) {
+            camera_found_ = true;
+            searching_next_ = false;
             return transition(State::wifi_join,
                               kCancelTimer | kPauseBle | kConnectCameraWifi |
                                   kStartTimer,
                               config_.wifi_join_timeout_ms);
         }
         if (event == Event::timeout) {
+            if (searching_next_) {
+                // No further camera answered.
+                return cameras_finished(kPauseBle);
+            }
             return camera_failed(kPauseBle);
         }
         if (event == Event::stop_requested) {
@@ -163,15 +268,21 @@ Result Fsm::handle(Event event)
     case State::session:
         if (event == Event::wifi_disconnected) {
             // Stay in this state until the session has ended.
-            return {state_, state_, kStopSession | kDisconnectWifi,
-                    0,      true,   Outcome::none};
+            return {state_,
+                    state_,
+                    kStopSession | kDisconnectWifi,
+                    0,
+                    true,
+                    Outcome::none,
+                    CameraResult::none};
         }
         if (event == Event::stop_requested) {
             // The session closes and then reports session_ended.
             const std::uint32_t actions =
                 stop_pending_ ? kNone : kStopSession | kDisconnectWifi;
             stop_pending_ = true;
-            return {state_, state_, actions, 0, true, Outcome::none};
+            return {state_, state_,        actions,           0,
+                    true,   Outcome::none, CameraResult::none};
         }
         if (event == Event::session_ended || event == Event::session_partial ||
             event == Event::session_failed || event == Event::session_no_card) {
@@ -183,18 +294,15 @@ Result Fsm::handle(Event event)
                 return camera_failed(kDisconnectWifi);
             }
             if (event == Event::session_no_card) {
-                // Another attempt would end the same way. The sync still
-                // runs, so that the backend shows the missing card.
-                no_card_ = true;
-                if (uplink_enabled_ && !listing_) {
-                    return start_uplink(kDisconnectWifi);
-                }
-                return transition(State::idle, kDisconnectWifi, 0,
-                                  Outcome::camera_no_card);
+                // Another attempt would end the same way.
+                return camera_ended(CameraResult::no_card, kDisconnectWifi);
             }
-            // Whatever the session fetched is on the SD card; sync it.
-            partial_ = event == Event::session_partial;
-            return camera_done(kDisconnectWifi);
+            // Whatever the session fetched is on the SD card; it is synced
+            // after the last camera.
+            return camera_ended(event == Event::session_partial
+                                    ? CameraResult::partial
+                                    : CameraResult::read,
+                                kDisconnectWifi);
         }
         break;
 
@@ -232,7 +340,7 @@ Result Fsm::handle(Event event)
         // aborting it would leave the backend half updated.
         break;
     }
-    return {state_, state_, kNone, 0, false, Outcome::none};
+    return {state_, state_, kNone, 0, false, Outcome::none, CameraResult::none};
 }
 
 const char *to_string(State state)
@@ -287,6 +395,23 @@ const char *to_string(Event event)
         return "timeout";
     }
     return "unknown";
+}
+
+const char *to_string(CameraResult result)
+{
+    switch (result) {
+    case CameraResult::none:
+        return "none";
+    case CameraResult::read:
+        return "read";
+    case CameraResult::partial:
+        return "partial";
+    case CameraResult::no_card:
+        return "no-card";
+    case CameraResult::failed:
+        return "failed";
+    }
+    return "none";
 }
 
 const char *to_string(Outcome outcome)

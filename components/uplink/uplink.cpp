@@ -370,7 +370,7 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
             command_result.id = command.id;
             if (command.type == "readCamera") {
                 const schedule::ReadRequests::Reply reply =
-                    schedule::on_read_command(command.id);
+                    schedule::on_read_command(command.id, result.cam_id);
                 if (reply == schedule::ReadRequests::Reply::pending) {
                     continue;
                 }

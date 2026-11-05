@@ -37,7 +37,8 @@
 #endif
 
 #define EVENT_QUEUE_LENGTH 8
-#define CONTROLLER_TASK_STACK 4096
+// The status (with the per-camera results) is copied on this stack.
+#define CONTROLLER_TASK_STACK 6144
 #define SESSION_TASK_STACK 8192
 // TLS handshakes need a large stack.
 #define UPLINK_TASK_STACK 12288
@@ -61,6 +62,9 @@ struct QueuedEvent {
     bool list_only;
     // With the end of a listing's session: the files it reported.
     std::uint32_t listed_files;
+    // With the end of a session: the camera's id and battery (if reported).
+    char cam_id[sizeof(session_camera_t::cam_id)];
+    int bat_percent;
     char ssid[MAX_SSID_LEN + 1];
     char password[MAX_PASSWORD_LEN + 1];
 };
@@ -72,7 +76,12 @@ const session::Config kConfig = {
     CONFIG_SESSION_WIFI_JOIN_TIMEOUT_S * 1000u,
     CONFIG_SESSION_RETRY_DELAY_S * 1000u,
     CONFIG_SESSION_MAX_ATTEMPTS,
+    CONFIG_SESSION_NEXT_CAMERA_TIMEOUT_S * 1000u,
+    CONFIG_SESSION_MAX_CAMERAS,
+    CONFIG_SESSION_CAMERA_BUDGET_S * 1000u,
 };
+static_assert(CONFIG_SESSION_MAX_CAMERAS <= SESSION_MAX_CAMERA_RESULTS,
+              "the status lists every camera of a scan");
 
 QueueHandle_t s_events;
 QueueHandle_t s_session_requests;
@@ -90,7 +99,13 @@ esp_ip4_addr_t s_gateway;
 // Settings read when the current cycle started (home Wi-Fi, backend).
 hub_config::Settings s_settings;
 
-// Outcome of the camera session and the sync of the running cycle; only
+// The camera being read: its BLE name, and its id and battery once its
+// session ended. Only touched by the controller task.
+char s_camera_name[sizeof(session_camera_t::name)];
+char s_camera_id[sizeof(session_camera_t::cam_id)];
+int s_camera_battery = -1;
+
+// Outcome of the camera sessions and the sync of the running cycle; only
 // touched by the controller task.
 bool s_camera_ok;
 bool s_list_only;
@@ -194,6 +209,22 @@ session_result_t result_of(session::Outcome outcome)
     return SESSION_RESULT_NONE;
 }
 
+session_camera_result_t camera_result_of(session::CameraResult result)
+{
+    switch (result) {
+    case session::CameraResult::read:
+    case session::CameraResult::none:
+        return SESSION_CAMERA_READ;
+    case session::CameraResult::partial:
+        return SESSION_CAMERA_PARTIAL;
+    case session::CameraResult::no_card:
+        return SESSION_CAMERA_NO_CARD;
+    case session::CameraResult::failed:
+        return SESSION_CAMERA_FAILED;
+    }
+    return SESSION_CAMERA_READ;
+}
+
 session_front_end_phase_t front_end_of(session::FrontEndPhase phase)
 {
     switch (phase) {
@@ -259,7 +290,23 @@ void publish_status(const session::Result &result)
         s_status.last_result = SESSION_RESULT_NONE;
         s_status.last_result_name = session::to_string(session::Outcome::none);
         s_status.camera_ssid[0] = '\0';
+        memset(s_status.cameras, 0, sizeof(s_status.cameras));
     }
+    s_status.camera_finished =
+        result.camera_result != session::CameraResult::none;
+    const std::uint32_t done = s_fsm.cameras_done();
+    if (s_status.camera_finished && done >= 1 &&
+        done <= SESSION_MAX_CAMERA_RESULTS) {
+        session_camera_t &camera = s_status.cameras[done - 1];
+        camera.result = camera_result_of(result.camera_result);
+        camera.result_name = session::to_string(result.camera_result);
+        snprintf(camera.name, sizeof(camera.name), "%s", s_camera_name);
+        snprintf(camera.cam_id, sizeof(camera.cam_id), "%s", s_camera_id);
+        camera.bat_percent = s_camera_battery;
+    }
+    s_status.cameras_done = done;
+    s_status.cameras_read = s_fsm.cameras_read();
+    s_status.searching_next_camera = s_fsm.searching_next();
     s_status.camera_ok = s_camera_ok;
     s_status.camera_partial = s_fsm.partial();
     s_status.camera_no_card = s_fsm.no_card();
@@ -271,8 +318,10 @@ void publish_status(const session::Result &result)
         s_status.last_result = result_of(result.outcome);
         s_status.last_result_name = session::to_string(result.outcome);
     }
+    // A camera without a card is what the front ends show when no other
+    // camera was read.
     set_front_end_phase(s_status, result.next, s_last_outcome, s_fsm.partial(),
-                        s_fsm.no_card());
+                        s_fsm.no_card() && s_fsm.cameras_read() == 0);
     // The SSID belongs to the camera part of the cycle. It stays set after the
     // cycle ends, so a front end can show it with the result until the next
     // cycle starts (cleared above).
@@ -352,6 +401,11 @@ void session_task(void *arg)
             error == ESP_OK, camera_protocol_media_list_error(), stored));
         event.error = error;
         event.listed_files = camera_protocol_listed_files();
+        camera_protocol_last_camera_id(event.cam_id, sizeof(event.cam_id));
+        // Only meaningful if this session got the device info (cam_id set).
+        event.bat_percent = event.cam_id[0] != '\0'
+                                ? camera_protocol_last_battery_percent()
+                                : -1;
         ESP_LOGI(TAG, "Camera session ended: %s, %u item(s) stored (%s)",
                  esp_err_to_name(error), (unsigned)stored,
                  session::to_string(event.type));
@@ -418,6 +472,12 @@ void execute(const session::Result &result)
     }
     if (actions & session::kDisconnectWifi) {
         camera_wifi_disconnect();
+    }
+    if (actions & session::kClearExcludedCameras) {
+        camera_ble_clear_done();
+    }
+    if (actions & session::kExcludeCamera) {
+        camera_ble_mark_done();
     }
     if (actions & session::kResumeBle) {
         camera_ble_resume();
@@ -490,6 +550,9 @@ void controller_task(void *arg)
             s_fsm.state() == session::State::ble_activation) {
             strcpy(s_ssid, event.ssid);
             strcpy(s_password, event.password);
+            camera_ble_last_name(s_camera_name, sizeof(s_camera_name));
+            s_camera_id[0] = '\0';
+            s_camera_battery = -1;
         }
         wipe(event.password, sizeof(event.password));
         if (event.type == session::Event::wifi_connected) {
@@ -497,6 +560,9 @@ void controller_task(void *arg)
         }
         if (!s_fsm.busy() && (event.type == session::Event::scan_requested ||
                               event.type == session::Event::upload_requested)) {
+            s_camera_name[0] = '\0';
+            s_camera_id[0] = '\0';
+            s_camera_battery = -1;
             s_camera_ok = false;
             s_sync_ok = false;
             s_listed_files = 0;
@@ -505,11 +571,13 @@ void controller_task(void *arg)
         }
         if (is_session_end(event.type) &&
             s_fsm.state() == session::State::session && !s_fsm.stop_pending()) {
-            // Read in full or in part; a retry after a failed attempt sets it
-            // again.
-            s_camera_ok = event.type == session::Event::session_ended ||
+            // Read in full or in part, this camera or an earlier one.
+            s_camera_ok = s_camera_ok ||
+                          event.type == session::Event::session_ended ||
                           event.type == session::Event::session_partial;
             s_listed_files = event.listed_files;
+            snprintf(s_camera_id, sizeof(s_camera_id), "%s", event.cam_id);
+            s_camera_battery = event.bat_percent;
         }
         if (event.type == session::Event::uplink_done &&
             s_fsm.state() == session::State::uplink) {
@@ -520,6 +588,7 @@ void controller_task(void *arg)
             load_settings_for_cycle();
         }
 
+        s_fsm.set_time_ms((std::uint32_t)(esp_timer_get_time() / 1000));
         const session::Result result = s_fsm.handle(event.type);
         if (!result.handled) {
             ESP_LOGD(TAG, "Ignoring \"%s\" in state %s",
@@ -542,6 +611,17 @@ void controller_task(void *arg)
                      (unsigned)(result.timer_ms / 1000),
                      (unsigned)(s_fsm.attempt() + 1),
                      (unsigned)kConfig.max_attempts);
+        }
+        if (result.camera_result != session::CameraResult::none) {
+            ESP_LOGI(TAG, "Camera %u (%s, id '%s'): %s; %u read so far",
+                     (unsigned)s_fsm.cameras_done(), s_camera_name, s_camera_id,
+                     session::to_string(result.camera_result),
+                     (unsigned)s_fsm.cameras_read());
+        }
+        if (s_fsm.searching_next() &&
+            result.next == session::State::ble_activation) {
+            ESP_LOGI(TAG, "Looking for a further camera for %u s",
+                     (unsigned)(result.timer_ms / 1000));
         }
         s_state = result.next;
         execute(result);
@@ -568,6 +648,7 @@ esp_err_t session_controller_init(void)
     s_status.phase = SESSION_PHASE_IDLE;
     s_status.phase_name = session::to_string(session::State::idle);
     s_status.max_attempts = kConfig.max_attempts;
+    s_status.max_cameras = kConfig.max_cameras;
     s_status.last_result = SESSION_RESULT_NONE;
     s_status.last_result_name = session::to_string(session::Outcome::none);
     set_front_end_phase(s_status, session::State::idle, session::Outcome::none);
@@ -617,7 +698,8 @@ esp_err_t session_controller_start(void)
     }
     ESP_LOGI(TAG,
              "Session controller idle; waiting for a scan request "
-             "(%u attempts)",
+             "(up to %u cameras, %u attempts each)",
+             (unsigned)CONFIG_SESSION_MAX_CAMERAS,
              (unsigned)CONFIG_SESSION_MAX_ATTEMPTS);
     return ESP_OK;
 }

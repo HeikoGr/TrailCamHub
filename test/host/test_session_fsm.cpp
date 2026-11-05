@@ -9,8 +9,11 @@ using namespace session;
 namespace
 {
 
-// BLE timeout, Wi-Fi join timeout, retry delay, attempts.
-const Config kConfig = {90000, 30000, 5000, 3};
+// BLE timeout, Wi-Fi join timeout, retry delay, attempts, next-camera
+// timeout, cameras, camera budget. One camera per cycle, as before #57.
+const Config kConfig = {90000, 30000, 5000, 3, 20000, 1, 0};
+// Up to three cameras, at most 10 minutes for the camera part.
+const Config kMulti = {90000, 30000, 5000, 2, 20000, 3, 600000};
 
 bool has(const Result &result, Action action)
 {
@@ -129,7 +132,7 @@ TEST_CASE("camera failures are retried, then the cycle gives up")
 
 TEST_CASE("BLE activation timeout counts as a failed attempt")
 {
-    Fsm fsm({90000, 30000, 5000, 1});
+    Fsm fsm({90000, 30000, 5000, 1, 20000, 1, 0});
     fsm.handle(Event::scan_requested);
     const Result result = fsm.handle(Event::timeout);
     CHECK(result.next == State::idle);
@@ -181,7 +184,7 @@ TEST_CASE("requests while busy are ignored")
 
 TEST_CASE("zero attempts are treated as one")
 {
-    Fsm fsm({90000, 30000, 5000, 0});
+    Fsm fsm({90000, 30000, 5000, 0, 20000, 0, 0});
     fsm.handle(Event::scan_requested);
     CHECK(fsm.handle(Event::timeout).next == State::idle);
 }
@@ -522,4 +525,211 @@ TEST_CASE("a listing ends as listed, never as a scan, and never syncs")
     fsm.set_uplink_enabled(false);
     reach_session(fsm);
     CHECK(fsm.handle(Event::session_ended).outcome == Outcome::camera_scanned);
+}
+
+// --- Several cameras per scan (#57) ---
+
+namespace
+{
+
+// From BLE activation (first or next camera) into the camera session.
+void connect_camera(Fsm &fsm)
+{
+    REQUIRE(fsm.state() == State::ble_activation);
+    fsm.handle(Event::credentials_received);
+    fsm.handle(Event::wifi_connected);
+    REQUIRE(fsm.state() == State::session);
+}
+
+}  // namespace
+
+TEST_CASE("a scan reads one camera after the other, then syncs")
+{
+    Fsm fsm(kMulti);
+    fsm.set_uplink_enabled(true);
+    Result result = fsm.handle(Event::scan_requested);
+    CHECK(has(result, kClearExcludedCameras));
+    connect_camera(fsm);
+
+    // The first camera is done: look for the next one, skipping it.
+    result = fsm.handle(Event::session_ended);
+    CHECK(result.next == State::ble_activation);
+    CHECK(result.camera_result == CameraResult::read);
+    CHECK(has(result, kDisconnectWifi));
+    CHECK(has(result, kExcludeCamera));
+    CHECK(has(result, kResumeBle));
+    CHECK(result.timer_ms == kMulti.next_camera_timeout_ms);
+    CHECK(fsm.searching_next());
+    CHECK(fsm.attempt() == 1);
+    CHECK(fsm.cameras_done() == 1);
+    CHECK(fsm.cameras_read() == 1);
+    CHECK(front_end_phase(fsm.state(), Outcome::none) ==
+          FrontEndPhase::searching);
+
+    connect_camera(fsm);
+    CHECK_FALSE(fsm.searching_next());
+    result = fsm.handle(Event::session_partial);
+    CHECK(result.camera_result == CameraResult::partial);
+    CHECK(result.next == State::ble_activation);
+
+    // No further camera answers: the camera part is over, sync.
+    result = fsm.handle(Event::timeout);
+    CHECK(result.next == State::uplink_join);
+    CHECK(has(result, kPauseBle));
+    CHECK(has(result, kConnectHomeWifi));
+    CHECK(result.camera_result == CameraResult::none);
+    CHECK(fsm.cameras_done() == 2);
+    CHECK(fsm.cameras_read() == 2);
+    CHECK(fsm.partial());
+
+    fsm.handle(Event::wifi_connected);
+    CHECK(fsm.handle(Event::uplink_done).outcome == Outcome::uplink_done);
+    // Kept after the cycle, for the status.
+    CHECK(fsm.cameras_read() == 2);
+}
+
+TEST_CASE("the last allowed camera goes straight to the sync")
+{
+    Fsm fsm(kMulti);
+    fsm.set_uplink_enabled(true);
+    fsm.handle(Event::scan_requested);
+    for (int i = 0; i < 2; i++) {
+        connect_camera(fsm);
+        fsm.handle(Event::session_ended);
+    }
+    connect_camera(fsm);
+    const Result result = fsm.handle(Event::session_ended);
+    CHECK(result.camera_result == CameraResult::read);
+    CHECK(result.next == State::uplink_join);
+    CHECK(fsm.cameras_done() == kMulti.max_cameras);
+}
+
+TEST_CASE("an unreachable camera is skipped and does not block the others")
+{
+    Fsm fsm(kMulti);
+    fsm.set_uplink_enabled(true);
+    fsm.handle(Event::scan_requested);
+
+    // Found over BLE, but its Wi-Fi cannot be joined: retried once.
+    fsm.handle(Event::credentials_received);
+    Result result = fsm.handle(Event::wifi_failed);
+    CHECK(result.next == State::backoff);
+    fsm.handle(Event::timeout);
+    fsm.handle(Event::credentials_received);
+    result = fsm.handle(Event::wifi_failed);
+    // All attempts used: skip it and look for the next camera.
+    CHECK(result.camera_result == CameraResult::failed);
+    CHECK(result.next == State::ble_activation);
+    CHECK(has(result, kExcludeCamera));
+    CHECK(fsm.cameras_done() == 1);
+    CHECK(fsm.cameras_read() == 0);
+
+    connect_camera(fsm);
+    result = fsm.handle(Event::session_ended);
+    CHECK(result.camera_result == CameraResult::read);
+    result = fsm.handle(Event::timeout);
+    CHECK(result.next == State::uplink_join);
+}
+
+TEST_CASE("a scan without any camera read ends as unreachable")
+{
+    Fsm fsm(kMulti);
+    fsm.set_uplink_enabled(true);
+    fsm.handle(Event::scan_requested);
+    fsm.handle(Event::credentials_received);
+    fsm.handle(Event::wifi_failed);
+    fsm.handle(Event::timeout);
+    fsm.handle(Event::credentials_received);
+    fsm.handle(Event::wifi_failed);
+    REQUIRE(fsm.searching_next());
+    const Result result = fsm.handle(Event::timeout);
+    CHECK(result.next == State::idle);
+    CHECK(result.outcome == Outcome::camera_unreachable);
+    CHECK_FALSE(has(result, kConnectHomeWifi));
+
+    // No camera found at all: the attempts are retries, not further cameras.
+    Fsm none(kMulti);
+    none.handle(Event::scan_requested);
+    CHECK(none.handle(Event::timeout).next == State::backoff);
+    none.handle(Event::timeout);
+    CHECK(none.handle(Event::timeout).outcome == Outcome::camera_unreachable);
+    CHECK(none.cameras_done() == 0);
+}
+
+TEST_CASE("a camera without a card counts as done; the others are synced")
+{
+    Fsm fsm(kMulti);
+    fsm.set_uplink_enabled(true);
+    fsm.handle(Event::scan_requested);
+    connect_camera(fsm);
+    Result result = fsm.handle(Event::session_no_card);
+    CHECK(result.camera_result == CameraResult::no_card);
+    CHECK(result.next == State::ble_activation);
+    CHECK(has(result, kExcludeCamera));
+    connect_camera(fsm);
+    fsm.handle(Event::session_ended);
+    result = fsm.handle(Event::timeout);
+    CHECK(result.next == State::uplink_join);
+    CHECK(fsm.no_card());
+    CHECK(fsm.cameras_read() == 1);
+
+    // Only cameras without a card: still synced, to report the cards.
+    Fsm only(kMulti);
+    only.set_uplink_enabled(true);
+    only.handle(Event::scan_requested);
+    connect_camera(only);
+    only.handle(Event::session_no_card);
+    CHECK(only.handle(Event::timeout).next == State::uplink_join);
+}
+
+TEST_CASE("no further camera is started once the time budget is spent")
+{
+    Fsm fsm(kMulti);
+    fsm.set_uplink_enabled(true);
+    fsm.set_time_ms(1000);
+    fsm.handle(Event::scan_requested);
+    connect_camera(fsm);
+    fsm.set_time_ms(1000 + kMulti.camera_budget_ms);
+    const Result result = fsm.handle(Event::session_ended);
+    CHECK(result.camera_result == CameraResult::read);
+    CHECK(result.next == State::uplink_join);
+
+    // The clock may wrap; only the elapsed time counts.
+    Fsm wrap(kMulti);
+    wrap.set_time_ms(0xFFFFFF00u);
+    wrap.handle(Event::scan_requested);
+    connect_camera(wrap);
+    wrap.set_time_ms(1000);
+    CHECK(wrap.handle(Event::session_ended).next == State::ble_activation);
+}
+
+TEST_CASE("a stop while looking for the next camera ends the cycle")
+{
+    Fsm fsm(kMulti);
+    fsm.set_uplink_enabled(true);
+    fsm.handle(Event::scan_requested);
+    connect_camera(fsm);
+    fsm.handle(Event::session_ended);
+    const Result result = fsm.handle(Event::stop_requested);
+    CHECK(result.outcome == Outcome::stopped);
+    CHECK_FALSE(has(result, kConnectHomeWifi));
+}
+
+TEST_CASE("a listing reads only one camera")
+{
+    Fsm fsm(kMulti);
+    fsm.set_listing(true);
+    fsm.handle(Event::scan_requested);
+    connect_camera(fsm);
+    const Result result = fsm.handle(Event::session_ended);
+    CHECK(result.outcome == Outcome::camera_listed);
+    CHECK(result.camera_result == CameraResult::read);
+}
+
+TEST_CASE("camera results have stable names")
+{
+    CHECK(std::string(to_string(CameraResult::read)) == "read");
+    CHECK(std::string(to_string(CameraResult::partial)) == "partial");
+    CHECK(std::string(to_string(CameraResult::no_card)) == "no-card");
+    CHECK(std::string(to_string(CameraResult::failed)) == "failed");
 }

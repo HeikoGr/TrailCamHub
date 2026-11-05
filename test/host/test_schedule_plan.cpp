@@ -312,26 +312,54 @@ TEST_CASE("readCamera commands are answered after the next read")
     ReadRequests requests;
     requests.clear();
     bool is_new = false;
-    CHECK(requests.on_command("cmd-1", &is_new) ==
+    CHECK(requests.on_command("cmd-1", "CAM1", &is_new) ==
           ReadRequests::Reply::pending);
     CHECK(is_new);
     CHECK(requests.any_pending());
     // Sent again before the read: still pending, nothing new to do.
-    CHECK(requests.on_command("cmd-1", &is_new) ==
+    CHECK(requests.on_command("cmd-1", "CAM1", &is_new) ==
           ReadRequests::Reply::pending);
     CHECK_FALSE(is_new);
 
-    requests.on_camera_result(true);
+    requests.on_camera_read("CAM1");
+    requests.on_camera_part_ended();
     CHECK_FALSE(requests.any_pending());
-    CHECK(requests.on_command("cmd-1", &is_new) == ReadRequests::Reply::done);
+    CHECK(requests.on_command("cmd-1", "CAM1", &is_new) ==
+          ReadRequests::Reply::done);
     CHECK_FALSE(is_new);
     // Forgotten once answered.
-    CHECK(requests.on_command("cmd-1", &is_new) ==
+    CHECK(requests.on_command("cmd-1", "CAM1", &is_new) ==
           ReadRequests::Reply::pending);
     CHECK(is_new);
 
-    requests.on_camera_result(false);
-    CHECK(requests.on_command("cmd-1", &is_new) == ReadRequests::Reply::failed);
+    requests.on_camera_part_ended();
+    CHECK(requests.on_command("cmd-1", "CAM1", &is_new) ==
+          ReadRequests::Reply::failed);
+}
+
+TEST_CASE("a readCamera command is done only when its camera was read")
+{
+    ReadRequests requests;
+    requests.clear();
+    bool is_new = false;
+    requests.on_command("for-1", "CAM1", &is_new);
+    requests.on_command("for-2", "CAM2", &is_new);
+
+    // The scan read only the other camera.
+    requests.on_camera_read("CAM2");
+    CHECK(requests.any_pending());
+    requests.on_camera_part_ended();
+    CHECK(requests.on_command("for-1", "CAM1", &is_new) ==
+          ReadRequests::Reply::failed);
+    CHECK(requests.on_command("for-2", "CAM2", &is_new) ==
+          ReadRequests::Reply::done);
+
+    // A camera id that does not fit is any camera.
+    const std::string long_cam(ReadRequests::kCamIdSize, 'c');
+    requests.on_command("any", long_cam, &is_new);
+    requests.on_camera_read("CAM9");
+    CHECK(requests.on_command("any", long_cam, &is_new) ==
+          ReadRequests::Reply::done);
 }
 
 TEST_CASE("readCamera commands beyond the table still ask for a read")
@@ -340,12 +368,12 @@ TEST_CASE("readCamera commands beyond the table still ask for a read")
     requests.clear();
     bool is_new = false;
     for (int i = 0; i < 6; i++) {
-        CHECK(requests.on_command("cmd-" + std::to_string(i), &is_new) ==
-              ReadRequests::Reply::pending);
+        CHECK(requests.on_command("cmd-" + std::to_string(i), "CAM1",
+                                  &is_new) == ReadRequests::Reply::pending);
         CHECK(is_new);
     }
     const std::string long_id(ReadRequests::kIdSize, 'x');
-    CHECK(requests.on_command(long_id, &is_new) ==
+    CHECK(requests.on_command(long_id, "CAM1", &is_new) ==
           ReadRequests::Reply::pending);
     CHECK(is_new);
 }

@@ -168,32 +168,43 @@ State after_successful_sync(const State &state);
 
 // --- Reads asked for by the backend ("readCamera" commands) ---
 
-// Commands come with every check-in until they are acknowledged. A new one
-// asks for a read; once a read has been tried, the next check-in acknowledges
-// the command with its outcome. Kept in RTC memory: only plain fields.
+// Commands come with every check-in until they are acknowledged, each for one
+// camera. A new one asks for a read; once a scan has been tried, the next
+// check-in acknowledges the command: done if that scan read the camera it was
+// for, failed otherwise (a scan reads every camera that answers, so another
+// camera being read does not count). Kept in RTC memory: only plain fields.
 struct ReadRequests {
     static constexpr std::size_t kMax = 4;
     static constexpr std::size_t kIdSize = 48;
+    static constexpr std::size_t kCamIdSize = 40;
 
     enum class Reply {
-        pending,  // no read since the command arrived: do not acknowledge
-        done,     // a read succeeded since: acknowledge as done
-        failed,   // a read failed since: acknowledge as failed
+        pending,  // no scan since the command arrived: do not acknowledge
+        done,     // a scan since read the camera: acknowledge as done
+        failed,   // a scan since did not read it: acknowledge as failed
     };
 
     struct Entry {
         char id[kIdSize];
+        // The camera the read is for; empty: any camera.
+        char cam_id[kCamIdSize];
         // 0 free, 1 pending, 2 done, 3 failed.
         std::uint8_t state;
     };
     Entry entries[kMax];
 
-    // A command arrived. `is_new` is set when it was not known: a read is
-    // needed then. An answer other than pending forgets the command.
-    Reply on_command(const std::string &id, bool *is_new);
+    // A command for `cam_id` arrived. `is_new` is set when it was not known:
+    // a read is needed then. An answer other than pending forgets the
+    // command. A camera id that does not fit is treated as "any camera".
+    Reply on_command(const std::string &id, const std::string &cam_id,
+                     bool *is_new);
 
-    // Records the outcome of a camera read for all pending commands.
-    void on_camera_result(bool ok);
+    // The running scan read `cam_id` (fully or in part): its pending
+    // commands are done.
+    void on_camera_read(const std::string &cam_id);
+    // The camera part of the running scan is over: pending commands whose
+    // camera was not read have failed.
+    void on_camera_part_ended();
 
     bool any_pending() const;
     void clear();
