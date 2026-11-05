@@ -61,6 +61,12 @@ class FrameReorder
     {
         return outcome != Outcome::ahead && outcome != Outcome::failed;
     }
+    // Frames passed on or kept in the window: grows with every new frame the
+    // stream keeps, not with repeats or frames it drops.
+    std::uint64_t kept_frames() const
+    {
+        return next_frame_ + pending_;
+    }
 
     bool started() const
     {

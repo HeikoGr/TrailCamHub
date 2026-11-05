@@ -146,3 +146,24 @@ TEST_CASE("bad first frame or sink failure invalidates the stream")
     h.fail = false;
     CHECK(h.feed(record, 1, 0, ack) == BulkStream::Status::invalid);
 }
+
+TEST_CASE("BulkStream reports progress only for new frames")
+{
+    const auto record = make_record(3000);
+    REQUIRE(frame_count(record) >= 3);
+    Harness h;
+    bool ack = false;
+    h.feed(record, 0, 500, ack);
+    CHECK(h.stream.progressed());
+    h.feed(record, 0, 500, ack);
+    CHECK(ack);                          // a repeat is still acknowledged ...
+    CHECK_FALSE(h.stream.progressed());  // ... but is no progress
+    h.feed(record, 2, 500, ack);
+    CHECK(h.stream.progressed());  // buffered ahead of frame 1
+    h.feed(record, 2, 500, ack);
+    CHECK_FALSE(h.stream.progressed());
+    h.feed(record, 1, 500, ack);
+    CHECK(h.stream.progressed());
+    h.stream.reset();
+    CHECK_FALSE(h.stream.progressed());
+}
