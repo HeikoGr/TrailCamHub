@@ -74,6 +74,9 @@ SemaphoreHandle_t s_lock;
 // Shared with the setters under s_lock.
 char s_phase[16] = "idle";
 char s_camera_ssid[33];
+uint32_t s_cameras_done;
+uint32_t s_cameras_read;
+uint32_t s_max_cameras;
 int64_t s_retry_deadline_us;
 uint32_t s_media_done;
 uint32_t s_media_stored;
@@ -96,6 +99,18 @@ bool card_busy()
 void event(const std::string &message)
 {
     reply("EVENT", message);
+}
+
+std::string format_line(const char *format, ...)
+    __attribute__((format(printf, 1, 2)));
+std::string format_line(const char *format, ...)
+{
+    char text[120];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(text, sizeof(text), format, args);
+    va_end(args);
+    return text;
 }
 
 // Last phase printed; only touched by the session controller task.
@@ -121,6 +136,9 @@ void on_status(const session_status_t *status, void *context)
     }
     s_retry_deadline_us =
         esp_timer_get_time() + (int64_t)status->retry_delay_ms * 1000;
+    s_cameras_done = status->cameras_done;
+    s_cameras_read = status->cameras_read;
+    s_max_cameras = status->max_cameras;
     xSemaphoreGive(s_lock);
 
     if (status->phase != s_printed_phase) {
@@ -131,6 +149,21 @@ void on_status(const session_status_t *status, void *context)
         event("stopping");
     }
     s_printed_stopping = status->stopping;
+    // "camera 2 read TC100_A1F0 F4_C1_56_06_A1_F0": a camera of the scan is
+    // done (read, partial, no-card or failed); the id is "-" if unknown.
+    if (status->camera_finished && status->cameras_done >= 1 &&
+        status->cameras_done <= SESSION_MAX_CAMERA_RESULTS) {
+        const session_camera_t &camera =
+            status->cameras[status->cameras_done - 1];
+        event(format_line("camera %u %s %s %s", (unsigned)status->cameras_done,
+                          camera.result_name,
+                          camera.name[0] != '\0' ? camera.name : "unknown",
+                          camera.cam_id[0] != '\0' ? camera.cam_id : "-"));
+    }
+    if (status->searching_next_camera &&
+        status->phase == SESSION_PHASE_CAMERA_WAKE && status->camera_finished) {
+        event("searching next camera");
+    }
     if (status->cycle_finished) {
         // "done uplink-done no-card": synced, but the camera has no SD card.
         const bool no_card_synced =
@@ -141,24 +174,16 @@ void on_status(const session_status_t *status, void *context)
     }
 }
 
-std::string format_line(const char *format, ...)
-    __attribute__((format(printf, 1, 2)));
-std::string format_line(const char *format, ...)
-{
-    char text[120];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(text, sizeof(text), format, args);
-    va_end(args);
-    return text;
-}
-
 // The cycle's phase, the download progress, the memory and the SD card.
 void print_details()
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     reply("INFO", std::string("phase ") + s_phase);
     reply("INFO", std::string("camera ") + s_camera_ssid);
+    reply("INFO", format_line("cameras %lu read, %lu done (at most %lu)",
+                              (unsigned long)s_cameras_read,
+                              (unsigned long)s_cameras_done,
+                              (unsigned long)s_max_cameras));
     if (strcmp(s_phase, "retry_wait") == 0) {
         const int64_t left_us = s_retry_deadline_us - esp_timer_get_time();
         reply("INFO",

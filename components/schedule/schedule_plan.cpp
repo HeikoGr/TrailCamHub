@@ -346,6 +346,7 @@ State after_successful_sync(const State &state)
 }
 
 ReadRequests::Reply ReadRequests::on_command(const std::string &id,
+                                             const std::string &cam_id,
                                              bool *is_new)
 {
     if (is_new != nullptr) {
@@ -374,6 +375,11 @@ ReadRequests::Reply ReadRequests::on_command(const std::string &id,
         for (Entry &entry : entries) {
             if (entry.state == wanted) {
                 std::memcpy(entry.id, id.c_str(), id.size() + 1);
+                entry.cam_id[0] = '\0';
+                if (cam_id.size() < kCamIdSize) {
+                    std::memcpy(entry.cam_id, cam_id.c_str(),
+                                cam_id.size() + 1);
+                }
                 entry.state = 1;
                 return Reply::pending;
             }
@@ -382,11 +388,21 @@ ReadRequests::Reply ReadRequests::on_command(const std::string &id,
     return Reply::pending;
 }
 
-void ReadRequests::on_camera_result(bool ok)
+void ReadRequests::on_camera_read(const std::string &cam_id)
+{
+    for (Entry &entry : entries) {
+        if (entry.state == 1 &&
+            (entry.cam_id[0] == '\0' || cam_id == entry.cam_id)) {
+            entry.state = 2;
+        }
+    }
+}
+
+void ReadRequests::on_camera_part_ended()
 {
     for (Entry &entry : entries) {
         if (entry.state == 1) {
-            entry.state = ok ? 2 : 3;
+            entry.state = 3;
         }
     }
 }

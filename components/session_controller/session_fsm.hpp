@@ -1,13 +1,17 @@
 #pragma once
 
 // State machine of one TrailCamHub cycle. The hub stays idle until a cycle is
-// requested (serial command, timer); then it activates the camera over BLE,
-// joins its Wi-Fi, runs the UDP session and - if an uplink is configured -
-// joins the home Wi-Fi and syncs with the backend. Failed camera attempts are
-// retried a bounded number of times; afterwards the hub returns to idle and
-// reports the outcome. An "upload only" request skips the camera part. A stop
-// request ends the camera part of a running cycle early and returns to idle
-// without the backend sync; a running sync is not interrupted.
+// requested (serial command, timer); then it activates a camera over BLE,
+// joins its Wi-Fi, runs the UDP session and goes on with the next camera:
+// BLE again, skipping the cameras done in this cycle, until no further one
+// answers within next_camera_timeout_ms, max_cameras are done or the camera
+// time budget is spent. Then - if an uplink is configured - it joins the home
+// Wi-Fi and syncs with the backend. Failed attempts are retried a bounded
+// number of times per camera; a camera that still fails is skipped, so that
+// it does not block the others. An "upload only" request skips the camera
+// part. A stop request ends the camera part of a running cycle early and
+// returns to idle without the backend sync; a running sync is not
+// interrupted.
 //
 // Who requests cycles and what happens after them (sleep, staying awake for
 // a local UI) is up to the application; the state machine is the same for
@@ -52,7 +56,7 @@ enum class Event : std::uint8_t {
 };
 
 // Actions as bit flags. The controller executes them in the order of the
-// declarations below.
+// declarations below, except kExcludeCamera, which runs before kResumeBle.
 enum Action : std::uint32_t {
     kNone = 0,
     kCancelTimer = 1u << 0,
@@ -65,6 +69,21 @@ enum Action : std::uint32_t {
     kStartSession = 1u << 7,
     kStartUplink = 1u << 8,
     kStartTimer = 1u << 9,
+    // The last camera activated over BLE is done for this cycle: skip it
+    // when looking for the next one.
+    kExcludeCamera = 1u << 10,
+    // A new cycle starts: no camera is done yet.
+    kClearExcludedCameras = 1u << 11,
+};
+
+// How one camera of a cycle ended; reported with the transition that ends
+// it (Result::camera_result).
+enum class CameraResult : std::uint8_t {
+    none,     // no camera ended with this transition
+    read,     // its session did all its work
+    partial,  // its session stored some media before an error
+    no_card,  // it has no SD card
+    failed,   // found over BLE, but not read after all attempts
 };
 
 // How a cycle ended; reported with the transition back to idle.
@@ -73,7 +92,7 @@ enum class Outcome : std::uint8_t {
     camera_scanned,      // camera session done, no uplink configured
     camera_listed,       // listing of the camera's media done (no sync)
     uplink_done,         // camera session (if any) and uplink done
-    camera_unreachable,  // all camera attempts failed
+    camera_unreachable,  // no camera was read (all attempts failed)
     // The camera has no SD card (media list error) and no sync followed:
     // none is configured, or the cycle only lists. With a sync the cycle ends
     // with uplink_done or uplink_unreachable and Fsm::no_card() is set.
@@ -121,8 +140,15 @@ struct Config {
     std::uint32_t ble_activation_timeout_ms;
     std::uint32_t wifi_join_timeout_ms;
     std::uint32_t retry_delay_ms;
-    // Camera attempts per cycle (at least 1).
+    // Camera attempts per camera (at least 1).
     std::uint32_t max_attempts;
+    // How long to look for a further camera after one is done.
+    std::uint32_t next_camera_timeout_ms;
+    // Cameras per cycle (at least 1); 1 reads only the first that answers.
+    std::uint32_t max_cameras;
+    // No further camera is started once the camera part has run this long;
+    // 0: no limit. See set_time_ms().
+    std::uint32_t camera_budget_ms;
 };
 
 struct Result {
@@ -136,6 +162,8 @@ struct Result {
     bool handled;
     // Set when the cycle finished with this transition.
     Outcome outcome;
+    // Set when a camera ended with this transition.
+    CameraResult camera_result;
 };
 
 class Fsm
@@ -156,20 +184,33 @@ class Fsm
     // session with camera_listed and never syncs. Read when a cycle starts.
     void set_listing(bool listing);
 
-    // Camera attempt within the current cycle (1-based; 0 when idle).
+    // The time of the next event, in milliseconds of any monotonic clock;
+    // used for the camera time budget. Call before handle().
+    void set_time_ms(std::uint32_t now_ms);
+
+    // Attempt for the current camera (1-based; 0 when idle).
     std::uint32_t attempt() const;
+
+    // Cameras done in this cycle (read, without card or given up) and of
+    // those the ones read (fully or in part). Kept after the cycle ends,
+    // cleared when the next one starts.
+    std::uint32_t cameras_done() const;
+    std::uint32_t cameras_read() const;
+
+    // Looking for a further camera: a BLE timeout ends the camera part.
+    bool searching_next() const;
 
     // True between a stop request during the camera session and the end of
     // that session (the session needs a moment to close cleanly).
     bool stop_pending() const;
 
-    // The camera session of the current (or last) cycle ended with an error
+    // A camera session of the current (or last) cycle ended with an error
     // after storing some media. Cleared when a cycle starts.
     bool partial() const;
 
-    // The camera of the current (or last) cycle reported no SD card. The
-    // cycle still syncs (if configured), so that the backend learns about
-    // it. Cleared when a cycle starts.
+    // A camera of the current (or last) cycle reported no SD card. The cycle
+    // still syncs (if configured), so that the backend learns about it.
+    // Cleared when a cycle starts.
     bool no_card() const;
 
   private:
@@ -177,7 +218,12 @@ class Fsm
                       std::uint32_t timer_ms = 0,
                       Outcome outcome = Outcome::none);
     Result camera_failed(std::uint32_t actions);
+    Result camera_ended(CameraResult result, std::uint32_t actions);
+    Result next_camera(std::uint32_t actions, CameraResult result);
+    Result cameras_finished(std::uint32_t actions,
+                            CameraResult result = CameraResult::none);
     Result camera_done(std::uint32_t actions);
+    bool budget_spent() const;
     Result start_uplink(std::uint32_t actions);
     Result stop(std::uint32_t actions);
 
@@ -189,11 +235,21 @@ class Fsm
     bool stop_pending_{false};
     bool partial_{false};
     bool no_card_{false};
+    std::uint32_t cameras_done_{0};
+    std::uint32_t cameras_read_{0};
+    // A camera returned its credentials in the current round, so a failure
+    // belongs to a camera (it is skipped after all attempts).
+    bool camera_found_{false};
+    bool searching_next_{false};
+    std::uint32_t now_ms_{0};
+    std::uint32_t cycle_started_ms_{0};
 };
 
 const char *to_string(State state);
 const char *to_string(Event event);
 const char *to_string(Outcome outcome);
+// Stable names: "read", "partial", "no-card", "failed" ("none").
+const char *to_string(CameraResult result);
 // Stable names used by the console ("phase ...") and the web UI JSON.
 const char *to_string(FrontEndPhase phase);
 

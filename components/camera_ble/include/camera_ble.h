@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "esp_err.h"
 
@@ -14,8 +15,9 @@ typedef esp_err_t (*camera_ble_credentials_cb_t)(const char *ssid,
 
 /*
  * Prepares the camera activation. Activation starts paused; call
- * camera_ble_resume() to start the BLE stack, scan for the camera, enable its
- * Wi-Fi and receive the credentials through `on_credentials`.
+ * camera_ble_resume() to start the BLE stack, scan for a camera (the first
+ * one not done in this scan), enable its Wi-Fi and receive the credentials
+ * through `on_credentials`.
  */
 esp_err_t camera_ble_start(camera_ble_credentials_cb_t on_credentials);
 
@@ -40,6 +42,22 @@ void camera_ble_set_link_callback(camera_ble_link_cb_t callback);
  * connection is closed first so the command is sent again.
  */
 void camera_ble_resume(void);
+
+/*
+ * A scan can read several cameras: after one is done, camera_ble_mark_done()
+ * makes the following activations skip it, so camera_ble_resume() reaches
+ * the next one. camera_ble_clear_done() starts a new scan with no camera
+ * done. Up to 8 cameras are remembered.
+ */
+void camera_ble_clear_done(void);
+/* Marks the camera of the last connection as done for this scan. */
+void camera_ble_mark_done(void);
+
+/*
+ * Copies the advertised name of the camera of the last connection, e.g.
+ * "TC100_ED3B" ("unknown" if none).
+ */
+void camera_ble_last_name(char *out, size_t size);
 
 /*
  * Stops scanning and ignores further camera advertisements. With

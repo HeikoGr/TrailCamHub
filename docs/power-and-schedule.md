@@ -82,9 +82,37 @@ effect, where each comes from, and the next planned read and check-in.
   next successful check-in.
 - **Read on request**: a `readCamera` command from the app makes a read due
   right after the check-in that brought it. The hub acknowledges it at the
-  check-in after the read (`done`, or `failed` if the read failed as above).
+  check-in after the read: `done` if that scan read the camera the command is
+  for, `failed` if it did not (another camera being read does not count).
 
 Cycles started by hand (console, button, web UI) count like scheduled ones.
+
+## Several cameras per scan
+
+A scan reads every camera that answers, one after the other, and syncs them
+all in one check-in (#57):
+
+1. BLE: wake the first camera that answers (name `TC100_…` or service
+   `0x8801`), join its Wi-Fi and read it.
+2. The camera is then done for this scan: its BLE address is skipped, and the
+   hub looks for a further camera for `SESSION_NEXT_CAMERA_TIMEOUT_S` (20 s).
+3. This repeats until no further camera answers, `SESSION_MAX_CAMERAS` (4) are
+   done, or the camera part has run for `SESSION_CAMERA_BUDGET_S` (15 min; a
+   running session is not cut short).
+4. Then the sync.
+
+Retries are per camera (`SESSION_MAX_ATTEMPTS`): a camera that answers over
+BLE but cannot be read (Wi-Fi, session) is skipped after its attempts, so that
+it does not block the others. A camera without an SD card is done at once.
+
+The status lists each camera with its result (`read`, `partial`, `no-card`,
+`failed`), BLE name and id; the console prints `TCH EVENT camera <n> <result>
+<name> <id>` for each. The scan counts as a read for the schedule when at least
+one camera was read; the weakest camera battery of the scan decides the
+low-battery stretch.
+
+Every scan spends the next-camera timeout once after its last camera. A hub
+with a single camera can set `SESSION_MAX_CAMERAS` to 1 to save that time.
 
 ## Deep sleep
 
@@ -122,6 +150,7 @@ are due after the start delay.
 
 - The A7670E modem uplink (#54) is not used; the check-in still joins the home
   Wi-Fi. Its power policy (attach only for check-ins) belongs there.
-- Several cameras in one scan (#57): the schedule is one shared cycle for all
-  cameras of a hub; a read request for any camera triggers a scan.
+- Per-camera schedules: the schedule is one shared cycle for all cameras of a
+  hub (a scan reads every camera that answers, see "Several cameras per scan"
+  below); a read request for any camera triggers a scan of all of them.
 - Notifications about a low camera battery (#58).

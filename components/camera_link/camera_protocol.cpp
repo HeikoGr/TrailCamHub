@@ -133,6 +133,10 @@ static bool s_devinfo_requested;
 static bool s_media_requested;
 static uint32_t s_next_command_seq;
 static std::string s_camera_id;
+// Sanitized id of the camera of the last session (see
+// camera_protocol_last_camera_id()); empty if it did not report one. Fixed
+// size, because other tasks read it after the session.
+static char s_last_camera_id[48];
 static camera::artemis::MediaCatalog s_catalog;
 static std::vector<camera::artemis::CatalogEntry> s_thumb_queue;
 static size_t s_thumb_index;
@@ -1148,6 +1152,8 @@ static void process_artemis_response(const SessionEvent &event)
         DeviceInfo info;
         if (parse_device_info(message.json, info)) {
             s_camera_id = info.dev_id;
+            snprintf(s_last_camera_id, sizeof(s_last_camera_id), "%s",
+                     camera::store::sanitize_camera_id(info.dev_id).c_str());
             if (info.bat_percent >= 0 && info.bat_percent <= 100) {
                 s_last_battery_percent = (int)info.bat_percent;
             }
@@ -1481,6 +1487,7 @@ esp_err_t camera_protocol_run(const esp_ip4_addr_t *gateway)
         return ESP_ERR_INVALID_ARG;
     }
     camera::link::clear_stop();
+    s_last_camera_id[0] = '\0';
     s_media_list_error = false;
     s_stored_items = 0;
     s_list_files = 0;
@@ -1522,6 +1529,13 @@ uint32_t camera_protocol_stored_items(void)
 uint32_t camera_protocol_listed_files(void)
 {
     return s_list_files;
+}
+
+void camera_protocol_last_camera_id(char *out, size_t size)
+{
+    if (out != NULL && size > 0) {
+        snprintf(out, size, "%s", s_last_camera_id);
+    }
 }
 
 int camera_protocol_last_battery_percent(void)

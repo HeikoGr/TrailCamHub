@@ -72,14 +72,18 @@ Times next_times_after_sync();
 // --- Bookkeeping (scheduler task and session status) ---
 
 void on_cycle_started(bool camera);
-// The camera part of the running cycle ended (ok: with a camera session).
-// Answers the pending read requests.
-void on_camera_result(bool ok);
+// The running cycle read the camera `cam_id` (the sanitized id used on the SD
+// card and in the backend). Answers its pending read requests.
+void on_camera_read(const std::string &cam_id);
+// The camera part of the running cycle ended: the read requests of cameras it
+// did not read have failed.
+void on_camera_part_ended();
 void on_cycle_finished(const CycleEnd &end);
 void set_camera_battery(int percent);
 
 // A "readCamera" command in a check-in. A new one makes a read due at once.
-ReadRequests::Reply on_read_command(const std::string &id);
+ReadRequests::Reply on_read_command(const std::string &id,
+                                    const std::string &cam_id);
 
 // Called whenever something changes that may move the next cycle (settings,
 // a requested read), e.g. to wake the scheduler task. Optional.
