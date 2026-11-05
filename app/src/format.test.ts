@@ -46,7 +46,7 @@ describe('storageLevel', () => {
     [2_047, undefined, 'low'],
     [3_000, 31_000, 'low'],
     [499, undefined, 'critical'],
-    [600, 31_000, 'low'],
+    [600, 20_000, 'low'],
     [600, 128_000, 'critical'],
   ] as const)('%i MB of %s MB free is %s', (free, total, level) => {
     expect(storageLevel(free, total)).toBe(level);
