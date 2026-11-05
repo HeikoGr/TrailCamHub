@@ -3,7 +3,9 @@ import type {
   CommandRecord,
   HubRecord,
   MediaRecord,
+  PairingCode,
   ScheduleConfig,
+  UserSettings,
   VideoState,
 } from '../model';
 import type { CameraTelemetry, HubTelemetry, Store } from './types';
@@ -21,6 +23,8 @@ export class MemoryStore implements Store {
   private readonly links = new Map<number, Set<string>>();
   private readonly media = new Map<string, Map<number, MediaRecord>>();
   private readonly commands = new Map<string, Map<string, CommandRecord>>();
+  private readonly settings = new Map<number, UserSettings>();
+  private readonly pairings = new Map<string, PairingCode>();
 
   async putHub(hub: HubRecord): Promise<void> {
     this.hubs.set(hub.hubId, { ...hub });
@@ -81,6 +85,32 @@ export class MemoryStore implements Store {
 
   async isLinked(userId: number, hubId: string): Promise<boolean> {
     return this.links.get(userId)?.has(hubId) ?? false;
+  }
+
+  async listHubUserIds(hubId: string): Promise<number[]> {
+    return [...this.links.entries()]
+      .filter(([, hubs]) => hubs.has(hubId))
+      .map(([userId]) => userId)
+      .sort((a, b) => a - b);
+  }
+
+  async getUserSettings(userId: number): Promise<UserSettings | undefined> {
+    const settings = this.settings.get(userId);
+    return settings && { ...settings };
+  }
+
+  async putUserSettings(userId: number, settings: UserSettings): Promise<void> {
+    this.settings.set(userId, { ...settings });
+  }
+
+  async putPairingCode(pairing: PairingCode): Promise<void> {
+    this.pairings.set(pairing.code, { ...pairing });
+  }
+
+  async takePairingCode(code: string): Promise<PairingCode | undefined> {
+    const pairing = this.pairings.get(code);
+    this.pairings.delete(code);
+    return pairing;
   }
 
   async listMedia(camId: string): Promise<MediaRecord[]> {

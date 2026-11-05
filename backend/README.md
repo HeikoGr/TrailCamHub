@@ -1,11 +1,12 @@
 # TrailCamHub backend (AWS SAM)
 
-A small serverless backend for the hub and the Telegram Mini App:
+A small serverless backend for the hub, the Telegram Mini App and the bot:
 
 ```
 Hub (ESP32) ──Bearer <hub key>─────┐
-                                   ├─▶ Lambda (Function URL) ──▶ DynamoDB (hubs, cameras, media, commands)
-Mini App ──tma <Telegram initData>─┘          │
+Mini App ──tma <Telegram initData>─┼─▶ Lambda (Function URL) ──▶ DynamoDB (hubs, cameras, media, commands, users)
+Telegram ──webhook secret token────┘          │        │
+                                              │        └─▶ Telegram Bot API (notifications, replies)
                                               └─▶ S3 (thumbnails, via presigned URLs)
 ```
 
@@ -17,7 +18,9 @@ Mini App ──tma <Telegram initData>─┘          │
   belongs to that hub. If another hub reports the same camera id, that report is
   refused (`accepted: false`), so a hub cannot take over someone else's camera.
 - **Users** (Telegram accounts) are linked to hubs and see every camera of their
-  hubs. Several users can share a hub.
+  hubs. Several users can share a hub. A user is linked by opening a one-time
+  **pairing link** (see [Telegram bot](#telegram-bot)) or by an admin
+  (`register-hub --user`).
 
 - **One Lambda function** (Node.js 22, TypeScript, arm64) behind a **Function URL**
   — no API Gateway needed.
@@ -42,6 +45,8 @@ Everything is defined in [`template.yaml`](template.yaml) (AWS SAM).
 | PUT    | `/v1/hubs/{hubId}/schedule`    | `tma <initData>`       | Wake-up schedule of a hub (see below)          |
 | POST   | `/v1/device/checkin`           | `Bearer <hubId>.<key>` | Telemetry + media of all cameras (batch)       |
 | POST   | `/v1/device/ack`               | `Bearer <hubId>.<key>` | Confirm uploaded thumbnails and commands       |
+| POST   | `/v1/device/pairing-code`      | `Bearer <hubId>.<key>` | One-time pairing link for the hub to show      |
+| POST   | `/v1/telegram/webhook`         | webhook secret token   | Updates from Telegram (bot messages, buttons)  |
 
 A recording is identified by its **`mediaId`** (per camera), not by `dir`/`num`:
 the camera reuses `dir`/`num` after its card was cleared. `dir`/`num` are only
@@ -163,6 +168,58 @@ are 300–86400 seconds. The hub takes the change at its next check-in.
 
 `serverTime` lets the hub set its clock (and the camera's `utcTime`).
 
+## Telegram bot
+
+Besides serving the Mini App, the bot talks to its users. Telegram delivers
+updates to `POST /v1/telegram/webhook`; the deploy workflow registers that URL
+(`setWebhook`) and the command menu (`setMyCommands`) after every deploy. Every
+webhook request carries the header `X-Telegram-Bot-Api-Secret-Token`, derived
+from the bot token (`webhookSecret()` in `src/telegram/api.ts`), so nobody else
+can post updates. Only private chats are served.
+
+### Notifications
+
+When `/v1/device/ack` confirms a thumbnail for the first time, every user linked
+to the hub gets it as a photo with buttons: **🎬 Download video** (videos only;
+queues a `requestVideo` like the app) and **📱 Open app** (the Mini App, from the
+`MiniAppUrl` parameter). Limits, so a sync never floods a chat:
+
+- only recordings of the last three days (a new camera's backlog stays quiet),
+- three photos per camera and check-in, the rest summed up in one message,
+- ten messages per user and check-in.
+
+Telegram failures are logged and never fail the hub's request; a user who
+blocked the bot is skipped.
+
+### Commands and settings
+
+| Command                   | Effect                                                          |
+| ------------------------- | --------------------------------------------------------------- |
+| `/start <code>`           | Redeems a pairing code (what opening a pairing link sends)      |
+| `/settings`               | Shows the settings, with a button to turn notifications on/off  |
+| `/notify on\|off`         | Messages about new recordings                                   |
+| `/quiet 22-7` / `off`     | Quiet hours: messages in this window arrive without sound       |
+| `/timezone Europe/Berlin` | Time zone of the quiet hours (default: `DefaultTimeZone`)       |
+| `/invite`                 | One-time pairing link for one of your hubs, as QR code and text |
+
+Settings are stored per Telegram user (`USER#<id> / SETTINGS`).
+
+### Pairing
+
+A pairing code links whoever redeems it to a hub. It is shared as the link
+`https://t.me/<bot>?start=<code>`: opening it (or scanning its QR code) starts
+the bot with `/start <code>`, and the bot links the user. Codes work once and
+expire (DynamoDB deletes them through the table's TTL); there are three ways to
+get one:
+
+| Who                    | How                                               | Valid    |
+| ---------------------- | ------------------------------------------------- | -------- |
+| Admin                  | `npm run register-hub -- --hub garden-hub --pair` | 7 days   |
+| A user linked to a hub | `/invite` in the bot (QR code + link)             | 24 hours |
+| The hub                | `POST /v1/device/pairing-code` (to show as QR)    | 30 min   |
+
+The QR code is drawn by the backend itself (`src/qr.ts`), not by a web service.
+
 ## Development
 
 ```bash
@@ -231,12 +288,16 @@ Parameter Store is available, you can instead deploy with
 `TelegramBotTokenParameter=/trailcamhub/telegram-bot-token` and leave the token
 parameter empty.
 
-4. **Register a hub** and link it to your Telegram user id (e.g. from
-   [@userinfobot](https://t.me/userinfobot)):
+4. **Register a hub** and get a pairing link for yourself:
 
    ```bash
-   npm run register-hub -- --hub garden-hub --name Garden --user <id>
+   npm run register-hub -- --hub garden-hub --name Garden --pair
    ```
+
+   Open the printed link on your phone: Telegram starts the bot, which links
+   your account to the hub. Instead of `--pair` you can also link a Telegram
+   user id directly (`--user <id>`, e.g. from
+   [@userinfobot](https://t.me/userinfobot)).
 
    The script runs the registration inside the backend's Lambda function
    (`aws lambda invoke`), because AWS projects deny people direct access to
@@ -246,8 +307,12 @@ parameter empty.
 
    The printed hub key goes onto the hub (web installer → Device setup → Device
    key). Cameras need no registration: they appear when the hub first reports
-   them. Add family members with `--user <id>` (repeatable); `--rotate-key`
-   issues a new key.
+   them. Add family members with `/invite` in the bot, `--pair` or `--user <id>`
+   (repeatable); `--rotate-key` issues a new key.
+
+   Links made before the bot sent notifications (before #58) are only stored in
+   one direction, and the hub does not know whom to notify. Link those users
+   again once: `--user <id>` for each, or a pairing link.
 
    Admin tasks are only reachable by invoking the function directly; requests
    through the Function URL never trigger them.
@@ -262,5 +327,5 @@ billing more. In a classic account, set an AWS Budgets alert.
 
 ## Not yet included
 
-Telegram bot webhook (notifications, buttons), camera pairing by QR code, video
-upload, OTA manifest.
+Video upload (the bot's download button only queues the request), showing the
+hub's pairing code as a QR code on the hub, OTA manifest.

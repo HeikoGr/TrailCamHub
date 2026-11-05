@@ -58,6 +58,8 @@ describe('registerHub', () => {
     expect(
       await registerHub({ admin: 'registerHub', hubId: 'h', users: [-1] }, store),
     ).toMatchObject({ ok: false });
-    expect(await handleAdmin({ admin: 'dropTable' }, store)).toMatchObject({ ok: false });
+    expect(await handleAdmin({ admin: 'dropTable' }, { store, now: () => 0 })).toMatchObject({
+      ok: false,
+    });
   });
 });
