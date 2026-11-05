@@ -706,6 +706,40 @@ config WEB_UI_AP_PASSWORD
 
 endmenu
 
+menu "Firmware updates"
+
+config OTA_AUTO_UPDATE
+    bool "Install newer releases offered at the check-in"
+    default y
+    help
+        The backend offers the newest GitHub release (tag vX.Y.Z) for this
+        board and build variant. A hub that runs an older release downloads
+        it over HTTPS into the other OTA slot, checks its size, SHA-256 and
+        version, and restarts into it. The new firmware is kept once a
+        check-in succeeds; a restart before that goes back to the old one,
+        and that version is not installed again automatically. Development
+        builds (a commit hash as version) are never replaced. See
+        docs/ota.md.
+
+config HUB_BOARD_ID
+    string "Board name of the firmware images"
+    default "tdongle-s3" if BOARD_TDONGLE_S3
+    default "tdongle-c5" if BOARD_TDONGLE_C5
+    default "esp32p4" if IDF_TARGET_ESP32P4
+    default "esp32s3"
+    help
+        Names the image of a release that fits this board (the board names
+        of the CI build matrix).
+
+config HUB_BUILD_VARIANT
+    string "Build variant of the firmware images"
+    default "dev"
+    help
+        "dev" (INFO logging) or "release" (size-optimized, warnings only;
+        set by sdkconfig.defaults.release). An update keeps the variant.
+
+endmenu
+
 menu "Serial console"
 
 config HUB_CONSOLE_DIAGNOSTICS

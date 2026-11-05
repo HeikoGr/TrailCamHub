@@ -54,6 +54,10 @@ struct ScheduleReport {
 
 struct CheckinRequest {
     std::string hub_firmware;
+    // Board and build variant ("esp32s3", "release"): which firmware image
+    // fits the hub. Left out when empty.
+    std::string hub_board;
+    std::string hub_variant;
     std::int64_t hub_bat_percent = -1;  // -1 = unknown
     ScheduleReport schedule;
     std::vector<CameraReport> cameras;
@@ -79,8 +83,18 @@ struct CameraCheckin {
     std::vector<Command> commands;
 };
 
+// A newer firmware the backend offers (a GitHub release).
+struct FirmwareOffer {
+    bool present = false;
+    std::string version;  // e.g. "v1.2.3"
+    std::string url;      // https only
+    std::string sha256;   // lowercase hex, 64 characters
+    std::int64_t size = 0;
+};
+
 struct CheckinResponse {
     std::int64_t server_time = 0;
+    FirmwareOffer firmware;
     // Schedule set for this hub in the backend ("config"); a missing value
     // means none is set there.
     bool has_camera_plan = false;
