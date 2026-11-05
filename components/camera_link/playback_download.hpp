@@ -86,8 +86,9 @@ class PlaybackDownload
                const std::string &camera_id, std::size_t index,
                std::size_t count);
 
-    // Handles one frame of the playback stream (bulk subtype 0x02).
-    void handle_frame(std::uint16_t seq, const std::uint8_t *payload,
+    // Handles one frame of the playback stream (bulk subtype 0x02). Returns
+    // whether it advanced the stream (a new frame, not a repeat).
+    bool handle_frame(std::uint16_t seq, const std::uint8_t *payload,
                       std::size_t payload_len);
     // A frame on another subtype during the video (leftovers of the
     // thumbnails, already acknowledged by the caller).

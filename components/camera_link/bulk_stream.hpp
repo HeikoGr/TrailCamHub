@@ -71,6 +71,12 @@ class BulkStream
     {
         return prefix_;
     }
+    // Whether the last feed() took a new frame, passed on or kept in the
+    // window; repeats and frames that are not kept do not count.
+    bool progressed() const
+    {
+        return progressed_;
+    }
 
   private:
     // Passes one in-order frame on. Returns false if the sink failed.
@@ -85,6 +91,7 @@ class BulkStream
     std::uint32_t len_ = 0;
     bool have_header_ = false;
     bool failed_ = false;
+    bool progressed_ = false;
 };
 
 }  // namespace camera::artemis

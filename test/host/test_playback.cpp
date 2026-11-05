@@ -232,3 +232,29 @@ TEST_CASE("marker frame and Annex-B start")
     const std::uint8_t late[] = {1, 2, 3, 4, 5, 6, 0, 0, 1, 0x41};
     CHECK(annexb_start_offset(late, sizeof(late)) == 0);
 }
+
+TEST_CASE("playback stream reports progress only for new frames")
+{
+    const std::vector<std::uint8_t> stream =
+        record(4, 1, std::vector<std::uint8_t>(9000, 7));
+    const auto parts = frames(stream, 1024);
+    REQUIRE(parts.size() >= 9);
+    PlaybackStream playback(2, 1 << 20);
+    Collector c;
+    bool ack = false;
+    // Not a record start: nothing is kept yet.
+    playback.feed(1, parts[1].data(), parts[1].size(), c.sink, ack);
+    CHECK_FALSE(playback.progressed());
+    playback.feed(0, parts[0].data(), parts[0].size(), c.sink, ack);
+    CHECK(playback.progressed());  // delivered
+    playback.feed(2, parts[2].data(), parts[2].size(), c.sink, ack);
+    CHECK(playback.progressed());  // buffered behind a gap
+    playback.feed(2, parts[2].data(), parts[2].size(), c.sink, ack);
+    CHECK_FALSE(playback.progressed());  // buffered already
+    playback.feed(0, parts[0].data(), parts[0].size(), c.sink, ack);
+    CHECK_FALSE(playback.progressed());  // repeat of a passed-on frame
+    playback.feed(7, parts[7].data(), parts[7].size(), c.sink, ack);
+    CHECK_FALSE(playback.progressed());  // beyond the window, not kept
+    playback.feed(1, parts[1].data(), parts[1].size(), c.sink, ack);
+    CHECK(playback.progressed());  // fills the gap
+}

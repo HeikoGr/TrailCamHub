@@ -252,7 +252,7 @@ bool PlaybackDownload::finish_frame(
     return true;
 }
 
-void PlaybackDownload::handle_frame(std::uint16_t seq,
+bool PlaybackDownload::handle_frame(std::uint16_t seq,
                                     const std::uint8_t *payload,
                                     std::size_t payload_len)
 {
@@ -343,7 +343,7 @@ void PlaybackDownload::handle_frame(std::uint16_t seq,
     if (status == PlaybackStream::Status::invalid) {
         if (write_failed_) {
             host_.finish_download(false, true);
-            return;
+            return false;
         }
         ESP_LOGW(TAG, "Video stream out of sync after %llu frames",
                  (unsigned long long)playback_.frames());
@@ -351,7 +351,7 @@ void PlaybackDownload::handle_frame(std::uint16_t seq,
         ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload, dump, ESP_LOG_WARN);
         // Keep what was written; the rest of the video is missing.
         host_.finish_download(stats_.frames > 0, false);
-        return;
+        return false;
     }
     // Audio frames may still follow the last video frame, so the stream ends
     // only when the camera stops sending (see stream_ended()).
@@ -362,6 +362,7 @@ void PlaybackDownload::handle_frame(std::uint16_t seq,
         ESP_LOGI(TAG, "All %lld video frames received",
                  (long long)total_frames_);
     }
+    return playback_.progressed();
 }
 
 void PlaybackDownload::note_other_subtype_frame(std::uint8_t subtype,

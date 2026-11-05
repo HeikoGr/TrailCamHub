@@ -514,7 +514,8 @@ static void finish_current_download(bool stored, bool stop_all)
 
 // Handles one bulk frame of a running download: passes it to the stream,
 // which writes the file in order, and acknowledges the frames it took.
-static void handle_download_frame(int socket_fd,
+// Returns whether the frame advanced the download (see handle_bulk_frame()).
+static bool handle_download_frame(int socket_fd,
                                   const struct sockaddr_in *camera_address,
                                   uint8_t subtype, uint16_t seq,
                                   const uint8_t *payload, size_t payload_len,
@@ -529,7 +530,7 @@ static void handle_download_frame(int socket_fd,
             send_udp_request(socket_fd, camera_address, "BULK ACK (stray)",
                              stray_ack);
         }
-        return;
+        return false;
     }
     if (!s_download_stream.header_ready()) {
         s_bulk_subtype = subtype;
@@ -546,6 +547,7 @@ static void handle_download_frame(int socket_fd,
     bool ack = false;
     const BulkStream::Status status =
         s_download_stream.feed(seq, payload, payload_len, sink, ack);
+    const bool progressed = s_download_stream.progressed();
     if (ack) {
         queue_bulk_ack(socket_fd, camera_address, subtype, seq);
     }
@@ -573,7 +575,7 @@ static void handle_download_frame(int socket_fd,
             ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload, dump, ESP_LOG_WARN);
         }
         finish_current_download(false, sink_failed);
-        return;
+        return progressed;
     }
     if (status == BulkStream::Status::complete) {
         const auto &prefix = s_download_stream.prefix();
@@ -591,10 +593,11 @@ static void handle_download_frame(int socket_fd,
                      (long long)header.dir_num, (long long)header.media_num,
                      (long long)e.dir_num, (long long)e.media_num);
             finish_current_download(false, false);
-            return;
+            return progressed;
         }
         finish_current_download(true, false);
     }
+    return progressed;
 }
 
 // Aborts the current download if no data arrived for the stall timeout.
@@ -648,8 +651,11 @@ static void check_download_stall(int64_t now_us)
 
 // Handles one bulk-stream frame (D0/D1 subtype 0x03/0x04): feeds the
 // reassembler, acknowledges the window so the camera advances to the next
-// frames, and on completion extracts and emits the JPEG.
-static void handle_bulk_frame(int socket_fd,
+// frames, and on completion extracts and emits the JPEG. Returns whether the
+// frame advanced the work: a new frame of the current record, download or
+// video. Stray frames between records and repeats do not count, so a camera
+// that only resends them does not keep the session alive (watchdog).
+static bool handle_bulk_frame(int socket_fd,
                               const struct sockaddr_in *camera_address,
                               const uint8_t *packet, size_t size)
 {
@@ -666,8 +672,7 @@ static void handle_bulk_frame(int socket_fd,
     // subtypes are ignored.
     if (s_video.active()) {
         if (subtype == 0x02) {
-            s_video.handle_frame(seq, payload, payload_len);
-            return;
+            return s_video.handle_frame(seq, payload, payload_len);
         }
         // Leftovers of the thumbnails: acknowledge them, so that the camera
         // does not send them again and again, taking airtime from the video.
@@ -677,7 +682,7 @@ static void handle_bulk_frame(int socket_fd,
                              stray_ack);
         }
         s_video.note_other_subtype_frame(subtype, seq, payload, payload_len);
-        return;
+        return false;
     }
     // Leftovers of a stopped video stream.
     if (subtype == 0x02) {
@@ -687,14 +692,13 @@ static void handle_bulk_frame(int socket_fd,
             send_udp_request(socket_fd, camera_address, "BULK ACK (stray)",
                              stray_ack);
         }
-        return;
+        return false;
     }
     // Thumbnails keep subtype 0x04; any other subtype during a download is
     // the requested file (0x03 for photos).
     if (s_download_active && subtype != 0x04) {
-        handle_download_frame(socket_fd, camera_address, subtype, seq, payload,
-                              payload_len, is_record_start);
-        return;
+        return handle_download_frame(socket_fd, camera_address, subtype, seq,
+                                     payload, payload_len, is_record_start);
     }
 
     if (!s_bulk_active || subtype != s_bulk_subtype) {
@@ -711,7 +715,7 @@ static void handle_bulk_frame(int socket_fd,
             ESP_LOGD(TAG,
                      "BULK subtype 0x%02x seq %u: stray frame ignored (%u B)",
                      (unsigned)subtype, (unsigned)seq, (unsigned)payload_len);
-            return;
+            return false;
         }
         // The camera may resend the header frame of a record that is already
         // complete; a record starting before the end of the last one is such
@@ -728,7 +732,7 @@ static void handle_bulk_frame(int socket_fd,
                      "finished record ignored (next record from seq %u)",
                      (unsigned)subtype, (unsigned)seq,
                      (unsigned)s_bulk_next_seq);
-            return;
+            return false;
         }
         s_bulk.reset();
         s_bulk_subtype = subtype;
@@ -740,6 +744,8 @@ static void handle_bulk_frame(int socket_fd,
     const size_t before = s_bulk.received_frames();
     const BulkReassembler::Status status =
         s_bulk.feed(seq, payload, payload_len);
+    // The reassembler ignores repeated frames; only a new one counts.
+    const bool progressed = s_bulk.received_frames() > before;
 
     // Acknowledge the frame so the camera keeps streaming.
     queue_bulk_ack(socket_fd, camera_address, subtype, seq);
@@ -776,7 +782,7 @@ static void handle_bulk_frame(int socket_fd,
         ESP_LOG_BUFFER_HEX_LEVEL(TAG, payload, dump, ESP_LOG_WARN);
         s_bulk.reset();
         s_bulk_active = false;
-        return;
+        return false;
     }
     if (status == BulkReassembler::Status::complete) {
         s_bulk_next_seq =
@@ -854,6 +860,7 @@ static void handle_bulk_frame(int socket_fd,
             request_current_thumbnail();
         }
     }
+    return progressed;
 }
 
 // --- Listing only ---
@@ -1333,9 +1340,10 @@ static esp_err_t run_artemis_session(int socket_fd,
         // skip handle_packet() for them.
         if (received >= 8 && packet[0] == 0xf1 && packet[1] == 0xd0 &&
             packet[4] == 0xd1 && packet[5] != 0x00) {
-            s_last_progress_us = last_receive_us;
-            handle_bulk_frame(socket_fd, camera_address, packet,
-                              static_cast<size_t>(received));
+            if (handle_bulk_frame(socket_fd, camera_address, packet,
+                                  static_cast<size_t>(received))) {
+                s_last_progress_us = last_receive_us;
+            }
             continue;
         }
 

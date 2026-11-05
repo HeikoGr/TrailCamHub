@@ -107,8 +107,8 @@ config CAMERA_SESSION_IDLE_TIMEOUT_S
     default 60
     help
         The camera session is closed when the camera neither answered a
-        request nor sent media data for this long; its heartbeat answers do
-        not count. This ends a session that waits for an answer that never
+        request nor sent new media data for this long; its heartbeat answers
+        and repeated or stray media frames do not count. This ends a session that waits for an answer that never
         comes, so the camera does not keep its Wi-Fi on until its battery is
         empty. Keep it above the download stall timeout.
 
