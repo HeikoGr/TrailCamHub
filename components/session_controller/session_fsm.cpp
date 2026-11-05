@@ -30,6 +30,11 @@ bool Fsm::uplink_enabled() const
     return uplink_enabled_;
 }
 
+void Fsm::set_listing(bool listing)
+{
+    listing_ = listing;
+}
+
 std::uint32_t Fsm::attempt() const
 {
     return attempt_;
@@ -83,6 +88,9 @@ Result Fsm::camera_failed(std::uint32_t actions)
 
 Result Fsm::camera_done(std::uint32_t actions)
 {
+    if (listing_) {
+        return transition(State::idle, actions, 0, Outcome::camera_listed);
+    }
     if (uplink_enabled_) {
         return start_uplink(actions);
     }
@@ -276,6 +284,8 @@ const char *to_string(Outcome outcome)
         return "none";
     case Outcome::camera_scanned:
         return "camera-scanned";
+    case Outcome::camera_listed:
+        return "camera-listed";
     case Outcome::uplink_done:
         return "uplink-done";
     case Outcome::camera_unreachable:
@@ -302,6 +312,8 @@ FrontEndPhase front_end_phase(State state, Outcome last_outcome,
         case Outcome::uplink_done:
             return camera_partial ? FrontEndPhase::partial
                                   : FrontEndPhase::finished;
+        case Outcome::camera_listed:
+            return FrontEndPhase::listed;
         case Outcome::camera_unreachable:
             return FrontEndPhase::not_found;
         case Outcome::camera_no_card:
@@ -344,6 +356,8 @@ const char *to_string(FrontEndPhase phase)
         return "uploading";
     case FrontEndPhase::finished:
         return "finished";
+    case FrontEndPhase::listed:
+        return "listed";
     case FrontEndPhase::partial:
         return "partial";
     case FrontEndPhase::not_found:

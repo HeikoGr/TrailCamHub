@@ -179,6 +179,8 @@ ui::Phase to_ui_phase(dongle_ui_phase_t phase)
         return ui::Phase::retry_wait;
     case DONGLE_UI_FINISHED:
         return ui::Phase::finished;
+    case DONGLE_UI_LISTED:
+        return ui::Phase::listed;
     case DONGLE_UI_PARTIAL:
         return ui::Phase::partial;
     case DONGLE_UI_NOT_FOUND:

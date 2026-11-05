@@ -72,6 +72,9 @@ static void on_session_status(const session_status_t *status, void *context)
     case SESSION_FRONT_END_FINISHED:
         phase = DONGLE_UI_FINISHED;
         break;
+    case SESSION_FRONT_END_LISTED:
+        phase = DONGLE_UI_LISTED;
+        break;
     case SESSION_FRONT_END_PARTIAL:
         phase = DONGLE_UI_PARTIAL;
         break;
@@ -88,8 +91,14 @@ static void on_session_status(const session_status_t *status, void *context)
         phase = DONGLE_UI_STOPPED;
         break;
     }
+    // After a listing the front ends show the number of files on the
+    // camera as the media total (nothing was saved).
+    const bool listed = status->front_end_phase == SESSION_FRONT_END_LISTED;
 #if CONFIG_BOARD_TDONGLE
     if (s_display_ready) {
+        if (listed) {
+            dongle_ui_set_media_progress(0, 0, status->listed_files);
+        }
         dongle_ui_set_status(phase, status->camera_ssid,
                              status->retry_delay_ms);
     }
@@ -98,10 +107,14 @@ static void on_session_status(const session_status_t *status, void *context)
 #endif
 #if CONFIG_WEB_UI_ENABLE
     if (s_web_ready) {
+        if (listed) {
+            web_ui_set_media_progress(0, 0, status->listed_files);
+        }
         web_ui_set_status(status->front_end_phase_name, status->camera_ssid,
                           status->retry_delay_ms);
     }
 #endif
+    (void)listed;
 }
 
 #endif

@@ -348,6 +348,7 @@ TEST_CASE("front-end phase names stay stable for the console and web UI")
     CHECK(std::string(to_string(FrontEndPhase::retry_wait)) == "retry_wait");
     CHECK(std::string(to_string(FrontEndPhase::uploading)) == "uploading");
     CHECK(std::string(to_string(FrontEndPhase::finished)) == "finished");
+    CHECK(std::string(to_string(FrontEndPhase::listed)) == "listed");
     CHECK(std::string(to_string(FrontEndPhase::partial)) == "partial");
     CHECK(std::string(to_string(FrontEndPhase::not_found)) == "not_found");
     CHECK(std::string(to_string(FrontEndPhase::no_card)) == "no_card");
@@ -461,4 +462,36 @@ TEST_CASE("a stop wins over how the session ended")
         fsm.handle(Event::stop_requested);
         CHECK(fsm.handle(end).outcome == Outcome::stopped);
     }
+}
+
+TEST_CASE("a listing ends as listed, never as a scan, and never syncs")
+{
+    Fsm fsm(kConfig);
+    fsm.set_uplink_enabled(true);
+    fsm.set_listing(true);
+    reach_session(fsm);
+    const Result result = fsm.handle(Event::session_ended);
+    CHECK(result.next == State::idle);
+    CHECK_FALSE(has(result, kConnectHomeWifi));
+    CHECK(result.outcome == Outcome::camera_listed);
+    CHECK(std::string(to_string(result.outcome)) == "camera-listed");
+    CHECK(front_end_phase(fsm.state(), result.outcome) ==
+          FrontEndPhase::listed);
+
+    // A failed listing is retried, and a camera without a card says so.
+    Fsm failing(kConfig);
+    failing.set_listing(true);
+    reach_session(failing);
+    CHECK(failing.handle(Event::session_failed).next == State::backoff);
+    Fsm no_card(kConfig);
+    no_card.set_listing(true);
+    reach_session(no_card);
+    CHECK(no_card.handle(Event::session_no_card).outcome ==
+          Outcome::camera_no_card);
+
+    // The next scan is a normal one again.
+    fsm.set_listing(false);
+    fsm.set_uplink_enabled(false);
+    reach_session(fsm);
+    CHECK(fsm.handle(Event::session_ended).outcome == Outcome::camera_scanned);
 }

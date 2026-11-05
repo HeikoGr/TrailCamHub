@@ -146,6 +146,18 @@ Screen make_screen(Phase phase, const char *ssid, std::uint32_t retry_in_s,
         set_media_result(screen.line1, media);
         set_idle_lines(screen, web);
         break;
+    case Phase::listed: {
+        screen.tone = Tone::ok;
+        set(screen.title, "LISTED");
+        const unsigned long files =
+            media.total < kMaxCount ? media.total : kMaxCount;
+        char text[48];
+        std::snprintf(text, sizeof(text), "%lu file%s on the camera", files,
+                      files == 1 ? "" : "s");
+        set(screen.line1, text);
+        set_idle_lines(screen, web);
+        break;
+    }
     case Phase::partial:
         screen.tone = Tone::warning;
         set(screen.title, "INCOMPLETE");

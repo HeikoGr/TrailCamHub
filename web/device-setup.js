@@ -42,6 +42,7 @@
 
   const DONE_TEXT = {
     "camera-scanned": "Scan finished (no uplink configured)",
+    "camera-listed": "Listing finished (nothing fetched or synced)",
     "uplink-done": "Scan and upload finished",
     "camera-unreachable": "Camera not reached",
     "camera-no-card": "The camera has no SD card",
