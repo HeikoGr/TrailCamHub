@@ -338,6 +338,10 @@ bool parse_checkin_response(const std::string &json, CheckinResponse &out)
             if (json_find_string(obj, "id", command.id) &&
                 json_find_string(obj, "type", command.type)) {
                 json_find_int(obj, "mediaId", command.media_id);
+                if (!json_find_string(obj, "uploadUrl", command.upload_url) ||
+                    command.upload_url.rfind("https://", 0) != 0) {
+                    command.upload_url.clear();
+                }
                 camera.commands.push_back(command);
             }
         }

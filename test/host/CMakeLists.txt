@@ -71,6 +71,7 @@ add_executable(host_tests
     test_web_paths.cpp
     test_hub_console.cpp
     test_uplink_protocol.cpp
+    test_video_request.cpp
     test_wifi_disconnect_policy.cpp
     ${ble_dir}/ble_advertising.cpp
     ${ble_dir}/ble_wifi_response.cpp
@@ -108,7 +109,9 @@ add_executable(host_tests
     ${config_dir}/hub_config_rules.cpp
     ${console_dir}/command_parser.cpp
     ${uplink_dir}/uplink_protocol.cpp
+    ${uplink_dir}/video_request.cpp
     ${mp4_dir}/mp4_mux.cpp
+    ${mp4_dir}/mp4_file_source.cpp
     ${time_dir}/time_policy.cpp
     ${wifi_dir}/disconnect_policy.cpp
     ${schedule_dir}/schedule_plan.cpp
