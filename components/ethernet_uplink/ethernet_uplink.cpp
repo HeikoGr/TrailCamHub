@@ -10,11 +10,23 @@
 #include "esp_netif.h"
 #include "sdkconfig.h"
 
+#if CONFIG_ETH_UPLINK_W5500
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "esp_mac.h"
+#endif
+
 #include "ethernet_uplink.h"
 
 // Above the Wi-Fi station (100), so the default route does not move to the
 // camera network when it is joined.
 #define ETH_UPLINK_ROUTE_PRIO 128
+
+#if CONFIG_ETH_UPLINK_W5500
+// The SD card uses SPI2.
+#define ETH_UPLINK_SPI_HOST SPI3_HOST
+#define ETH_UPLINK_SPI_QUEUE_SIZE 20
+#endif
 
 static const char *TAG = "trailcamhub_eth";
 
@@ -72,14 +84,65 @@ static void ip_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-esp_err_t ethernet_uplink_start(void)
+#if CONFIG_ETH_UPLINK_W5500
+// The W5500 on its SPI bus. Its driver reports received frames through a GPIO
+// interrupt, so it needs the GPIO ISR service.
+static esp_err_t create_mac_and_phy(esp_eth_mac_t **mac, esp_eth_phy_t **phy)
+{
+    esp_err_t error = gpio_install_isr_service(0);
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Could not install the GPIO ISR service: %s",
+                 esp_err_to_name(error));
+        return error;
+    }
+
+    spi_bus_config_t bus = {};
+    bus.miso_io_num = CONFIG_ETH_UPLINK_W5500_MISO_GPIO;
+    bus.mosi_io_num = CONFIG_ETH_UPLINK_W5500_MOSI_GPIO;
+    bus.sclk_io_num = CONFIG_ETH_UPLINK_W5500_SCLK_GPIO;
+    bus.quadwp_io_num = -1;
+    bus.quadhd_io_num = -1;
+    ESP_RETURN_ON_ERROR(
+        spi_bus_initialize(ETH_UPLINK_SPI_HOST, &bus, SPI_DMA_CH_AUTO), TAG,
+        "Could not initialize the W5500 SPI bus");
+
+    spi_device_interface_config_t device = {};
+    device.mode = 0;
+    device.clock_speed_hz = CONFIG_ETH_UPLINK_W5500_SPI_MHZ * 1000 * 1000;
+    device.spics_io_num = CONFIG_ETH_UPLINK_W5500_CS_GPIO;
+    device.queue_size = ETH_UPLINK_SPI_QUEUE_SIZE;
+    eth_w5500_config_t w5500_config =
+        ETH_W5500_DEFAULT_CONFIG(ETH_UPLINK_SPI_HOST, &device);
+    w5500_config.int_gpio_num = CONFIG_ETH_UPLINK_W5500_INT_GPIO;
+
+    eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
+    *mac = esp_eth_mac_new_w5500(&w5500_config, &mac_config);
+    if (*mac == NULL) {
+        ESP_LOGE(TAG, "Could not create the W5500 MAC driver");
+        return ESP_FAIL;
+    }
+
+    eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
+    phy_config.phy_addr = 1;  // Not used by the W5500, which has a single PHY.
+    phy_config.reset_gpio_num = CONFIG_ETH_UPLINK_PHY_RST_GPIO;
+    *phy = esp_eth_phy_new_w5500(&phy_config);
+    if (*phy == NULL) {
+        (*mac)->del(*mac);
+        ESP_LOGE(TAG, "Could not create the W5500 PHY driver");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+#else
+// The on-chip MAC with an IP101 PHY.
+static esp_err_t create_mac_and_phy(esp_eth_mac_t **mac, esp_eth_phy_t **phy)
 {
     eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
     eth_esp32_emac_config_t emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
     emac_config.smi_gpio.mdc_num = CONFIG_ETH_UPLINK_MDC_GPIO;
     emac_config.smi_gpio.mdio_num = CONFIG_ETH_UPLINK_MDIO_GPIO;
-    esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&emac_config, &mac_config);
-    if (mac == NULL) {
+    *mac = esp_eth_mac_new_esp32(&emac_config, &mac_config);
+    if (*mac == NULL) {
         ESP_LOGE(TAG, "Could not create the Ethernet MAC");
         return ESP_FAIL;
     }
@@ -87,12 +150,22 @@ esp_err_t ethernet_uplink_start(void)
     eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
     phy_config.phy_addr = CONFIG_ETH_UPLINK_PHY_ADDR;
     phy_config.reset_gpio_num = CONFIG_ETH_UPLINK_PHY_RST_GPIO;
-    esp_eth_phy_t *phy = esp_eth_phy_new_ip101(&phy_config);
-    if (phy == NULL) {
-        mac->del(mac);
+    *phy = esp_eth_phy_new_ip101(&phy_config);
+    if (*phy == NULL) {
+        (*mac)->del(*mac);
         ESP_LOGE(TAG, "Could not create the IP101 PHY driver");
         return ESP_FAIL;
     }
+    return ESP_OK;
+}
+#endif
+
+esp_err_t ethernet_uplink_start(void)
+{
+    esp_eth_mac_t *mac = NULL;
+    esp_eth_phy_t *phy = NULL;
+    ESP_RETURN_ON_ERROR(create_mac_and_phy(&mac, &phy), TAG,
+                        "Could not create the Ethernet driver");
 
     esp_eth_config_t eth_config = ETH_DEFAULT_CONFIG(mac, phy);
     esp_eth_handle_t handle = NULL;
@@ -102,10 +175,19 @@ esp_err_t ethernet_uplink_start(void)
         mac->del(mac);
         ESP_LOGE(TAG,
                  "Could not install the Ethernet driver (%s); check "
-                 "the PHY address and reset GPIO",
+                 "the Ethernet GPIOs and the PHY address",
                  esp_err_to_name(error));
         return error;
     }
+
+#if CONFIG_ETH_UPLINK_W5500
+    // The W5500 has no MAC address of its own.
+    uint8_t mac_address[6] = {};
+    ESP_RETURN_ON_ERROR(esp_read_mac(mac_address, ESP_MAC_ETH), TAG,
+                        "Could not read the Ethernet MAC address");
+    ESP_RETURN_ON_ERROR(esp_eth_ioctl(handle, ETH_CMD_S_MAC_ADDR, mac_address),
+                        TAG, "Could not set the Ethernet MAC address");
+#endif
 
     esp_netif_inherent_config_t netif_base = ESP_NETIF_INHERENT_DEFAULT_ETH();
     netif_base.route_prio = ETH_UPLINK_ROUTE_PRIO;

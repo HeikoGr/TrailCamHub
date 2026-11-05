@@ -7,13 +7,13 @@
 
 /*
  * Web UI: on Wi-Fi boards the device opens its own access point next to the
- * camera station (AP+STA); with CONFIG_WEB_UI_OVER_ETHERNET (ESP32-P4) it
- * serves on the Ethernet interface at the address that DHCP assigned, and the
- * access point, its password and the channel handling do not exist. The page
- * starts and stops the camera search, follows the status and the live log,
- * and browses, views and downloads the files on the SD card. The component
- * knows nothing about the camera workflow: the application reports the status
- * and receives the button actions through callbacks.
+ * camera station (AP+STA); with CONFIG_WEB_UI_OVER_ETHERNET (boards with
+ * Ethernet) it serves on the Ethernet interface at the address that DHCP
+ * assigned, and the access point, its password and the channel handling do not
+ * exist. The page starts and stops the camera search, follows the status and
+ * the live log, and browses, views and downloads the files on the SD card. The
+ * component knows nothing about the camera workflow: the application reports
+ * the status and receives the button actions through callbacks.
  *
  * When the station joins the camera, the access point moves to the camera's
  * channel, so clients are disconnected briefly and usually reconnect on their

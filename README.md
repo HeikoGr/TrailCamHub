@@ -51,7 +51,9 @@ The target board is the **Waveshare ESP32-S3-A7670E-4G** development board. Acco
 - 18650 battery holder, solar charging input, and a MAX17048 battery fuel gauge on I2C
 - DIP switches for camera, USB hub, and modem power; GNSS antenna connector; 24-pin camera connector
 
-The firmware configuration (`sdkconfig.defaults`, `partitions.csv`) targets this board: 16 MB flash, octal PSRAM, two 4 MB OTA application slots, a 64 KB core dump partition, and 64 KB NVS. Camera media is intended to be buffered on the SD card. Board revisions V1 and V2 differ in some GPIO assignments (camera and I2C); the SD card pins can be changed in `menuconfig` if a revision differs. Still to verify:
+The **Waveshare ESP32-S3-ETH** (with or without the PoE module) is supported with `SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32s3-eth"`: W5500 Ethernet on SPI, web UI on the Ethernet port (the log shows the address and password), console on the native USB port, and the microSD slot in SPI mode. The backend sync still joins the home Wi-Fi. **Not tested with a camera yet:** boot, SD card, W5500 link, DHCP and the web UI over Ethernet were checked on a board on USB power and on PoE alone, but no camera session has run on this board.
+
+The firmware configuration (`sdkconfig.defaults`, `partitions.csv`) targets the ESP32-S3-A7670E-4G: 16 MB flash, octal PSRAM, two 4 MB OTA application slots, a 64 KB core dump partition, and 64 KB NVS. Camera media is intended to be buffered on the SD card. Board revisions V1 and V2 differ in some GPIO assignments (camera and I2C); the SD card pins can be changed in `menuconfig` if a revision differs. Still to verify:
 
 - Board revision, modem power-control GPIOs, and the USB host/PPP setup for the A7670E
 - Power supply and cellular modem peak current requirements on battery
