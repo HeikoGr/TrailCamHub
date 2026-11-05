@@ -59,6 +59,8 @@ struct QueuedEvent {
     std::uint8_t reason;
     // With scan_requested: only list the camera's media.
     bool list_only;
+    // With the end of a listing's session: the files it reported.
+    std::uint32_t listed_files;
     char ssid[MAX_SSID_LEN + 1];
     char password[MAX_PASSWORD_LEN + 1];
 };
@@ -92,6 +94,8 @@ hub_config::Settings s_settings;
 // touched by the controller task.
 bool s_camera_ok;
 bool s_list_only;
+// Files reported by the listing of this cycle.
+uint32_t s_listed_files;
 bool s_sync_ok;
 
 // Published status; written by the controller task, read by any task.
@@ -174,10 +178,14 @@ session_result_t result_of(session::Outcome outcome)
         return SESSION_RESULT_NONE;
     case session::Outcome::camera_scanned:
         return SESSION_RESULT_CAMERA_SCANNED;
+    case session::Outcome::camera_listed:
+        return SESSION_RESULT_CAMERA_LISTED;
     case session::Outcome::uplink_done:
         return SESSION_RESULT_UPLINK_DONE;
     case session::Outcome::camera_unreachable:
         return SESSION_RESULT_CAMERA_UNREACHABLE;
+    case session::Outcome::camera_no_card:
+        return SESSION_RESULT_CAMERA_NO_CARD;
     case session::Outcome::uplink_unreachable:
         return SESSION_RESULT_UPLINK_UNREACHABLE;
     case session::Outcome::stopped:
@@ -203,8 +211,14 @@ session_front_end_phase_t front_end_of(session::FrontEndPhase phase)
         return SESSION_FRONT_END_UPLOADING;
     case session::FrontEndPhase::finished:
         return SESSION_FRONT_END_FINISHED;
+    case session::FrontEndPhase::listed:
+        return SESSION_FRONT_END_LISTED;
+    case session::FrontEndPhase::partial:
+        return SESSION_FRONT_END_PARTIAL;
     case session::FrontEndPhase::not_found:
         return SESSION_FRONT_END_NOT_FOUND;
+    case session::FrontEndPhase::no_card:
+        return SESSION_FRONT_END_NO_CARD;
     case session::FrontEndPhase::upload_failed:
         return SESSION_FRONT_END_UPLOAD_FAILED;
     case session::FrontEndPhase::stopped:
@@ -215,10 +229,11 @@ session_front_end_phase_t front_end_of(session::FrontEndPhase phase)
 
 // Sets the front-end phase of `status` for `state`.
 void set_front_end_phase(session_status_t &status, session::State state,
-                         session::Outcome last_outcome)
+                         session::Outcome last_outcome,
+                         bool camera_partial = false)
 {
     const session::FrontEndPhase phase =
-        session::front_end_phase(state, last_outcome);
+        session::front_end_phase(state, last_outcome, camera_partial);
     status.front_end_phase = front_end_of(phase);
     status.front_end_phase_name = session::to_string(phase);
 }
@@ -245,6 +260,8 @@ void publish_status(const session::Result &result)
         s_status.camera_ssid[0] = '\0';
     }
     s_status.camera_ok = s_camera_ok;
+    s_status.camera_partial = s_fsm.partial();
+    s_status.listed_files = s_listed_files;
     s_status.list_only = s_list_only;
     s_status.sync_ok = s_sync_ok;
     if (s_status.cycle_finished) {
@@ -252,7 +269,7 @@ void publish_status(const session::Result &result)
         s_status.last_result = result_of(result.outcome);
         s_status.last_result_name = session::to_string(result.outcome);
     }
-    set_front_end_phase(s_status, result.next, s_last_outcome);
+    set_front_end_phase(s_status, result.next, s_last_outcome, s_fsm.partial());
     // The SSID belongs to the camera part of the cycle. It stays set after the
     // cycle ends, so a front end can show it with the result until the next
     // cycle starts (cleared above).
@@ -326,9 +343,15 @@ void session_task(void *arg)
     while (true) {
         xQueueReceive(s_session_requests, &gateway, portMAX_DELAY);
         diagnostics_log_memory("camera Wi-Fi connected");
-        QueuedEvent event = make_event(session::Event::session_ended);
-        event.error = camera_protocol_run(&gateway);
-        ESP_LOGI(TAG, "Camera session ended: %s", esp_err_to_name(event.error));
+        const esp_err_t error = camera_protocol_run(&gateway);
+        const uint32_t stored = camera_protocol_stored_items();
+        QueuedEvent event = make_event(session::session_end_event(
+            error == ESP_OK, camera_protocol_media_list_error(), stored));
+        event.error = error;
+        event.listed_files = camera_protocol_listed_files();
+        ESP_LOGI(TAG, "Camera session ended: %s, %u item(s) stored (%s)",
+                 esp_err_to_name(error), (unsigned)stored,
+                 session::to_string(event.type));
         post_event(event);
     }
 }
@@ -430,6 +453,14 @@ void execute(const session::Result &result)
     }
 }
 
+bool is_session_end(session::Event event)
+{
+    return event == session::Event::session_ended ||
+           event == session::Event::session_partial ||
+           event == session::Event::session_failed ||
+           event == session::Event::session_no_card;
+}
+
 // Reads the stored settings when a cycle starts; the uplink only runs if
 // they are complete.
 void load_settings_for_cycle()
@@ -439,6 +470,7 @@ void load_settings_for_cycle()
     }
     s_fsm.set_uplink_enabled(hub_config::uplink_configured(s_settings) &&
                              !s_list_only);
+    s_fsm.set_listing(s_list_only);
 }
 
 void controller_task(void *arg)
@@ -464,12 +496,17 @@ void controller_task(void *arg)
                               event.type == session::Event::upload_requested)) {
             s_camera_ok = false;
             s_sync_ok = false;
+            s_listed_files = 0;
             s_list_only = event.list_only;
             camera_protocol_set_list_only(s_list_only);
         }
-        if (event.type == session::Event::session_ended &&
+        if (is_session_end(event.type) &&
             s_fsm.state() == session::State::session && !s_fsm.stop_pending()) {
-            s_camera_ok = event.error == ESP_OK;
+            // Read in full or in part; a retry after a failed attempt sets it
+            // again.
+            s_camera_ok = event.type == session::Event::session_ended ||
+                          event.type == session::Event::session_partial;
+            s_listed_files = event.listed_files;
         }
         if (event.type == session::Event::uplink_done &&
             s_fsm.state() == session::State::uplink) {

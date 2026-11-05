@@ -10,13 +10,16 @@ const PHASES = {
   retry_wait: ["NO LINK", "warn", ""],
   uploading: ["UPLOADING", "busy", "Syncing with the backend over the home Wi-Fi."],
   finished: ["FINISHED", "ok", ""],
+  listed: ["LISTED", "ok", ""],
+  partial: ["INCOMPLETE", "warn", ""],
   not_found: ["NOT FOUND", "warn", "The camera was not reached. Search again to retry."],
+  no_card: ["NO SD CARD", "warn", "The camera has no SD card, so there is nothing to read."],
   upload_failed: ["NO UPLOAD", "warn", "The home Wi-Fi was not reached; the data stays on the SD card."],
   stopped: ["STOPPED", "idle", "The search was stopped."],
 };
 
 // Phases in which no cycle runs.
-const IDLE_PHASES = ["idle", "finished", "not_found", "upload_failed", "stopped"];
+const IDLE_PHASES = ["idle", "finished", "listed", "partial", "not_found", "no_card", "upload_failed", "stopped"];
 
 // Path of the log file being written; it cannot be deleted.
 let activeLog = "";
@@ -92,12 +95,19 @@ async function refreshStatus() {
       $("detail").textContent = total
         ? `Saved ${stored} of ${total} files. Search again for new media.`
         : "Camera synced. Search again for new media.";
+    } else if (s.phase === "listed") {
+      $("detail").textContent = `${total} file${total === 1 ? "" : "s"} on the camera. Nothing was saved or synced.`;
+    } else if (s.phase === "partial") {
+      $("detail").textContent = total
+        ? `The session ended early: saved ${stored} of ${total} files. Search again for the rest.`
+        : "The session ended early; some media were saved. Search again for the rest.";
     } else {
       $("detail").textContent = text;
     }
     $("camera").textContent = s.camera || "–";
-    $("media").textContent = total ? `${stored} of ${total} saved` : "–";
-    $("progress").hidden = !total || s.phase === "finished";
+    $("media").textContent =
+      s.phase === "listed" ? `${total} on the camera` : total ? `${stored} of ${total} saved` : "–";
+    $("progress").hidden = !total || s.phase === "finished" || s.phase === "partial" || s.phase === "listed";
     $("progress").max = total || 1;
     $("progress").value = done;
     $("sd").textContent = s.sd_total_mb
