@@ -3,5 +3,5 @@ idf_component_register(SRCS "uplink.cpp" "uplink_protocol.cpp"
                        PRIV_INCLUDE_DIRS "."
                        REQUIRES hub_config
                        PRIV_REQUIRES camera_link esp_app_format
-                                     esp_http_client mbedtls schedule
+                                     esp_http_client hub_battery mbedtls schedule
                                      schedule_state time_sync)

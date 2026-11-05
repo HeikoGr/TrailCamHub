@@ -16,6 +16,7 @@
 #include "esp_log.h"
 
 #include "device_info.hpp"
+#include "hub_battery.hpp"
 #include "media_catalog.hpp"
 #include "media_store.hpp"
 #include "schedule_state.hpp"
@@ -284,6 +285,8 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
 
     CheckinRequest request;
     request.hub_firmware = esp_app_get_description()->version;
+    // -1 (left out of the check-in) on boards without a measurement.
+    request.hub_bat_percent = hub_battery::percent();
     request.schedule = schedule_report();
     std::vector<CameraState> cameras;
     collect_cameras(request, cameras);
