@@ -51,8 +51,16 @@ class MediaCatalog
     // cleared): it gets its own entry with no flags, and the old entry keeps
     // its flags. Items without a valid mediaId (missing or <= 0) are skipped.
     // Marks exactly the listed entries as `listed`. Returns the number of
-    // newly added entries.
+    // newly added entries. Same as begin_listing() and merge_page() for a
+    // list that fits in one page.
     std::size_t merge(const MediaList &list);
+
+    // A media list read in pages: begin_listing() clears `listed` on every
+    // entry, then merge_page() adds each page and marks its entries `listed`
+    // without touching the others. After the last page exactly the entries of
+    // all pages are `listed`.
+    void begin_listing();
+    std::size_t merge_page(const MediaList &page);
 
     CatalogEntry *find(std::int64_t media_id);
     const CatalogEntry *find(std::int64_t media_id) const;
@@ -66,13 +74,15 @@ class MediaCatalog
 
     // Work for the camera session, from the listed entries only: an entry
     // that is not on the card cannot be fetched, and its dir/num may belong
-    // to another recording now.
+    // to another recording now. Each list is ordered newest first (by dir/num,
+    // which is unique and increasing on the card), so that the newest
+    // recordings are fetched first when a session cannot fetch them all.
     // Items whose thumbnail is not stored yet.
     std::vector<CatalogEntry> missing_thumbnails() const;
     // Video items the user requested that are not downloaded yet.
     std::vector<CatalogEntry> pending_video_requests() const;
-    // Items whose full file is not stored yet, photos before videos; each
-    // kind is included only if selected.
+    // Items whose full file is not stored yet, photos before videos (each
+    // newest first); each kind is included only if selected.
     std::vector<CatalogEntry> missing_downloads(bool photos, bool videos) const;
     // Up to `limit` items without `flag`, in catalog order.
     std::vector<CatalogEntry> without_flag(Flag flag, std::size_t limit) const;

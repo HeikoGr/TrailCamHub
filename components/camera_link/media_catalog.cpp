@@ -1,5 +1,6 @@
 #include "media_catalog.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace camera::artemis
@@ -18,14 +19,35 @@ bool valid_media_id(std::int64_t id)
 {
     return id > 0;
 }
+
+// Newest first: a higher dir/num is a later recording on the card.
+void sort_newest_first(std::vector<CatalogEntry> &entries)
+{
+    std::stable_sort(entries.begin(), entries.end(),
+                     [](const CatalogEntry &a, const CatalogEntry &b) {
+                         if (a.dir_num != b.dir_num)
+                             return a.dir_num > b.dir_num;
+                         return a.media_num > b.media_num;
+                     });
+}
 }  // namespace
 
 std::size_t MediaCatalog::merge(const MediaList &list)
 {
+    begin_listing();
+    return merge_page(list);
+}
+
+void MediaCatalog::begin_listing()
+{
     for (CatalogEntry &e : entries_)
         e.listed = false;
+}
+
+std::size_t MediaCatalog::merge_page(const MediaList &page)
+{
     std::size_t added = 0;
-    for (const MediaItem &item : list.files) {
+    for (const MediaItem &item : page.files) {
         if (!valid_media_id(item.id))
             continue;
         CatalogEntry *e = find(item.id);
@@ -110,6 +132,7 @@ std::vector<CatalogEntry> MediaCatalog::missing_thumbnails() const
         if (e.listed && (e.flags & kThumbPresent) == 0)
             out.push_back(e);
     }
+    sort_newest_first(out);
     return out;
 }
 
@@ -121,6 +144,7 @@ std::vector<CatalogEntry> MediaCatalog::pending_video_requests() const
             (e.flags & kFileDownloaded) == 0)
             out.push_back(e);
     }
+    sort_newest_first(out);
     return out;
 }
 
@@ -131,12 +155,15 @@ std::vector<CatalogEntry> MediaCatalog::missing_downloads(bool photos,
     for (bool want_photos : {true, false}) {
         if (want_photos ? !photos : !videos)
             continue;
+        std::vector<CatalogEntry> kind;
         for (const CatalogEntry &e : entries_) {
             const bool is_photo = e.file_type == 0;
             if (e.listed && is_photo == want_photos &&
                 (e.flags & kFileDownloaded) == 0)
-                out.push_back(e);
+                kind.push_back(e);
         }
+        sort_newest_first(kind);
+        out.insert(out.end(), kind.begin(), kind.end());
     }
     return out;
 }

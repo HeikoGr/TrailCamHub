@@ -174,6 +174,13 @@ Per entry: `fileType` (0 and 2 appear paired per capture — photo/video), `medi
 download/thumbnail, `mediaTime` is a Unix timestamp (unreliable while the camera clock
 is unset). Page with `pageNo`.
 
+Paging: the list is sorted newest first (descending `mediaNum`). A page holds up to
+`itemCntPerPage` (45) entries; `cnt` is the number of entries on that page, not a total,
+and no total is reported. A page past the end is empty with `result` 0, so the list
+ends with a page of fewer than 45 entries. A scan reads the pages in order until then,
+or until `CAMERA_MEDIA_LIST_MAX_PAGES` (default 20) pages were read, and merges each
+page into the catalog; thumbnails and downloads are then fetched newest first.
+
 ### 5.5 Heartbeat (cmdId 525)
 Minimal body `{"cmdId":525}`, sent roughly every 3 seconds. The application sequence for
 heartbeats starts at `0x10001`. The firmware currently replays a precomputed heartbeat

@@ -147,6 +147,12 @@ static std::atomic<bool> s_list_only;
 static camera_protocol_list_cb_t s_list_callback;
 static int64_t s_list_page;
 static uint32_t s_list_files;
+// Scan: the media-list page being read (merged page by page into s_catalog)
+// and the items of the pages read so far.
+static int64_t s_scan_page;
+static uint32_t s_scan_photos;
+static uint32_t s_scan_videos;
+static uint32_t s_scan_added;
 // Last time the camera answered a request or sent bulk data. Heartbeats do
 // not count: the camera answers them even when nothing else happens.
 static int64_t s_last_progress_us;
@@ -896,6 +902,95 @@ static void handle_list_page(const std::string &json)
     }
 }
 
+// --- Media list of a scan ---
+
+static void request_scan_page()
+{
+    const std::string fields =
+        camera::artemis::media_list_request_fields(s_scan_page);
+    if (!send_artemis_command(768, fields.c_str(), "ARTEMIS GetMediaList")) {
+        ESP_LOGE(TAG, "Could not request media-list page %lld",
+                 (long long)s_scan_page);
+        s_end_session = true;
+    }
+}
+
+// All pages are merged: persist the catalog, then fetch the thumbnail of
+// every listed item we do not have one for yet (newest first).
+static void finish_scan_list()
+{
+    // The web protocol view reads the "Media list parsed: N items" prefix.
+    ESP_LOGI(TAG,
+             "Media list parsed: %u items (%u photos, %u videos), %lld "
+             "page(s)",
+             (unsigned)(s_scan_photos + s_scan_videos), (unsigned)s_scan_photos,
+             (unsigned)s_scan_videos, (long long)s_scan_page);
+    camera::store::save_catalog(s_camera_id, s_catalog);
+    s_thumb_queue = s_catalog.missing_thumbnails();
+    s_thumb_index = 0;
+    s_thumb_emitted = false;
+    ESP_LOGI(TAG, "Catalog %s: %u items (%u new), %u thumbnails to fetch",
+             s_camera_id.c_str(), (unsigned)s_catalog.size(),
+             (unsigned)s_scan_added, (unsigned)s_thumb_queue.size());
+    request_current_thumbnail();
+}
+
+// One page of the media list. The camera does not report a total, so the
+// list ends with a short (or empty) page; each page is merged on its own, so
+// only one page is held in RAM.
+static void handle_scan_page(const std::string &json)
+{
+    camera::artemis::MediaList list;
+    const bool parsed = camera::artemis::parse_media_list(json, list);
+    if (!parsed || camera::artemis::media_list_failed(list)) {
+        ESP_LOGE(TAG,
+                 "Media list page %lld failed (getMediaListRet %lld, "
+                 "errorMsg '%s'%s)",
+                 (long long)s_scan_page, (long long)list.list_ret,
+                 list.error_msg.c_str(), parsed ? "" : ", no mediaFiles array");
+        if (s_scan_page == 0) {
+            // Nothing to fetch: no thumbnail or download would be queued, so
+            // the session would idle on heartbeats. Leave the catalog as is.
+            ESP_LOGE(TAG, "Ending the camera session");
+            s_end_session = true;
+        } else {
+            // Work with the pages read so far.
+            finish_scan_list();
+        }
+        return;
+    }
+    if (list.page_no != s_scan_page) {
+        // A late answer to an earlier request; the answer to this one follows.
+        ESP_LOGW(TAG, "Ignoring media-list page %lld (expected %lld)",
+                 (long long)list.page_no, (long long)s_scan_page);
+        return;
+    }
+
+    for (const auto &item : list.files) {
+        if (item.file_type == 0)
+            ++s_scan_photos;
+        else
+            ++s_scan_videos;
+    }
+    const size_t added = s_catalog.merge_page(list);
+    s_scan_added += (uint32_t)added;
+    ESP_LOGI(TAG, "Media list page %lld: %u items (%u new), cnt %lld",
+             (long long)s_scan_page, (unsigned)list.files.size(),
+             (unsigned)added, (long long)list.count);
+    ++s_scan_page;
+    if (!camera::artemis::media_list_has_more(list)) {
+        finish_scan_list();
+    } else if (s_scan_page >= CONFIG_CAMERA_MEDIA_LIST_MAX_PAGES) {
+        ESP_LOGW(TAG,
+                 "Media list has more than %d pages; older files are not "
+                 "read in this session",
+                 CONFIG_CAMERA_MEDIA_LIST_MAX_PAGES);
+        finish_scan_list();
+    } else {
+        request_scan_page();
+    }
+}
+
 // Decrypts a received ARTEMIS DATA message (reassembling fragments). On the
 // login response it records the session token; the first command is sent only
 // once the session has settled (see the heartbeat-ack path), mirroring the
@@ -981,46 +1076,7 @@ static void process_artemis_response(const SessionEvent &event)
         return;
     }
     if (cmd_id == 768) {
-        camera::artemis::MediaList list;
-        const bool parsed =
-            camera::artemis::parse_media_list(message.json, list);
-        if (!parsed || camera::artemis::media_list_failed(list)) {
-            // Nothing to fetch: no thumbnail or download would be queued, so
-            // the session would idle on heartbeats. Leave the catalog as is.
-            ESP_LOGE(TAG,
-                     "Media list failed (getMediaListRet %lld, errorMsg "
-                     "'%s'%s); ending the camera session",
-                     (long long)list.list_ret, list.error_msg.c_str(),
-                     parsed ? "" : ", no mediaFiles array");
-            s_end_session = true;
-        } else {
-            int photos = 0;
-            int videos = 0;
-            for (const auto &item : list.files) {
-                if (item.file_type == 0)
-                    ++photos;
-                else
-                    ++videos;
-            }
-            ESP_LOGI(TAG,
-                     "Media list parsed: %u items (%d photos, %d videos), "
-                     "cnt %lld, pageNo %lld, result %lld",
-                     (unsigned)list.files.size(), photos, videos,
-                     (long long)list.count, (long long)list.page_no,
-                     (long long)list.result);
-            // Merge into the on-SD catalog, persist it, then fetch the
-            // thumbnail of every item we do not have one for yet.
-            const size_t added = s_catalog.merge(list);
-            camera::store::save_catalog(s_camera_id, s_catalog);
-            s_thumb_queue = s_catalog.missing_thumbnails();
-            s_thumb_index = 0;
-            s_thumb_emitted = false;
-            ESP_LOGI(TAG,
-                     "Catalog %s: %u items (%u new), %u thumbnails to fetch",
-                     s_camera_id.c_str(), (unsigned)s_catalog.size(),
-                     (unsigned)added, (unsigned)s_thumb_queue.size());
-            request_current_thumbnail();
-        }
+        handle_scan_page(message.json);
     }
 
     // Device info carries the camera identity (devId) and battery state. Use
@@ -1069,9 +1125,12 @@ static void process_artemis_response(const SessionEvent &event)
         ESP_LOGI(TAG, "Loaded catalog: %u known items",
                  (unsigned)s_catalog.size());
 
-        send_artemis_command(
-            768, camera::artemis::media_list_request_fields(0).c_str(),
-            "ARTEMIS GetMediaList");
+        s_catalog.begin_listing();
+        s_scan_page = 0;
+        s_scan_photos = 0;
+        s_scan_videos = 0;
+        s_scan_added = 0;
+        request_scan_page();
     }
 }
 
@@ -1101,6 +1160,7 @@ static esp_err_t run_artemis_session(int socket_fd,
     s_thumb_queue.clear();
     s_thumb_index = 0;
     s_thumb_emitted = false;
+    s_scan_page = 0;
     s_work_done = false;
     s_end_session = false;
     s_last_progress_us = esp_timer_get_time();
