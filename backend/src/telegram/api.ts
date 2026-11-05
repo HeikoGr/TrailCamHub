@@ -73,7 +73,7 @@ function truncate(text: string, max: number): string {
 
 function markup(options: SendOptions | undefined): Record<string, unknown> {
   return {
-    ...(options?.buttons ? { reply_markup: { inline_keyboard: options.buttons } } : {}),
+    ...(options?.buttons?.length ? { reply_markup: { inline_keyboard: options.buttons } } : {}),
     ...(options?.silent ? { disable_notification: true } : {}),
   };
 }
