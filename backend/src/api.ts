@@ -215,6 +215,9 @@ async function listMedia(req: ApiRequest, params: Record<string, string>, deps: 
       mediaTime: m.mediaTime,
       videoState: m.videoState,
       thumbUrl: await deps.storage.thumbReadUrl(camera.camId, m.mediaId),
+      ...(m.videoState === 'available'
+        ? { videoUrl: await deps.storage.videoReadUrl(camera.camId, m.mediaId) }
+        : {}),
     })),
   );
   return json(200, items);
@@ -303,6 +306,11 @@ function optionalNumber(value: unknown): number | undefined {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length <= 64 ? value : undefined;
+}
+
+/** A message from the hub, shortened to fit. */
+function optionalText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value.slice(0, 200) : undefined;
 }
 
 const SD_CARD_STATES: SdCardState[] = ['ok', 'missing'];
@@ -469,10 +477,17 @@ async function checkin(req: ApiRequest, _p: Record<string, string>, deps: Deps) 
         await deps.store.setVideoState(camId, command.mediaId, 'downloading');
       }
     }
-    result.commands = open.map((c) =>
-      c.type === 'requestVideo'
-        ? { id: c.id, type: c.type, mediaId: c.mediaId }
-        : { id: c.id, type: c.type },
+    result.commands = await Promise.all(
+      open.map(async (c) =>
+        c.type === 'requestVideo'
+          ? {
+              id: c.id,
+              type: c.type,
+              mediaId: c.mediaId,
+              uploadUrl: await deps.storage.videoUploadUrl(camId, c.mediaId),
+            }
+          : { id: c.id, type: c.type },
+      ),
     );
     results.set(camId, result);
   }
@@ -543,17 +558,23 @@ async function ack(req: ApiRequest, _p: Record<string, string>, deps: Deps) {
       if (typeof c?.id !== 'string' || (c.state !== 'done' && c.state !== 'failed')) continue;
       const command = await deps.store.getCommand(camera.camId, c.id);
       if (!command || command.state === 'done' || command.state === 'failed') continue;
-      await deps.store.putCommand(camera.camId, {
-        ...command,
-        state: c.state,
-        updated: now,
-        error: c.state === 'failed' ? optionalString(c.error) : undefined,
-      });
+      let state: 'done' | 'failed' = c.state;
+      let error = state === 'failed' ? (optionalText(c.error) ?? 'failed on the hub') : undefined;
+      // Trust S3, not the device: a video is available only if it arrived.
+      if (
+        command.type === 'requestVideo' &&
+        state === 'done' &&
+        !(await deps.storage.videoExists(camera.camId, command.mediaId))
+      ) {
+        state = 'failed';
+        error = 'the video did not arrive';
+      }
+      await deps.store.putCommand(camera.camId, { ...command, state, updated: now, error });
       if (command.type === 'requestVideo') {
         await deps.store.setVideoState(
           camera.camId,
           command.mediaId,
-          c.state === 'done' ? 'available' : 'failed',
+          state === 'done' ? 'available' : 'failed',
         );
       }
       commandsUpdated++;

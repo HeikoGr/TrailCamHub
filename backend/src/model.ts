@@ -167,6 +167,8 @@ export interface MediaItem {
   mediaTime: number;
   thumbUrl: string;
   videoState: VideoState;
+  /** With videoState `available`: short-lived URL of the MP4. */
+  videoUrl?: string;
 }
 
 export interface CommandResult {
@@ -227,8 +229,12 @@ export interface CameraCheckin {
   resync: boolean;
   /** Missing thumbnails: PUT the JPEG to `url`, then report it via /ack. */
   thumbUploads: Array<{ mediaId: number; url: string }>;
-  /** mediaId only for requestVideo. */
-  commands: Array<{ id: string; type: CommandType; mediaId?: number }>;
+  /**
+   * mediaId and uploadUrl only for requestVideo. The hub PUTs the MP4
+   * (Content-Type video/mp4) to `uploadUrl` and then acknowledges the command;
+   * an open command comes again with every check-in, with a fresh URL.
+   */
+  commands: Array<{ id: string; type: CommandType; mediaId?: number; uploadUrl?: string }>;
 }
 
 export interface CheckinResponse {
