@@ -33,6 +33,7 @@ set(time_dir ${repo_root}/components/time_sync)
 set(wifi_dir ${repo_root}/components/camera_wifi)
 set(schedule_dir ${repo_root}/components/schedule)
 set(sd_log_dir ${repo_root}/components/sd_log)
+set(battery_dir ${repo_root}/components/hub_battery)
 
 add_executable(host_tests
     test_main.cpp
@@ -46,6 +47,7 @@ add_executable(host_tests
     test_camera_clock.cpp
     test_artemis_message.cpp
     test_artemis_reassembler.cpp
+    test_battery_level.cpp
     test_media_list.cpp
     test_media_transfer.cpp
     test_bulk_reassembler.cpp
@@ -115,14 +117,15 @@ add_executable(host_tests
     ${time_dir}/time_policy.cpp
     ${wifi_dir}/disconnect_policy.cpp
     ${schedule_dir}/schedule_plan.cpp
-    ${sd_log_dir}/log_files.cpp)
+    ${sd_log_dir}/log_files.cpp
+    ${battery_dir}/battery_level.cpp)
 target_include_directories(host_tests PRIVATE ${ble_dir} ${link_dir} ${mp4_dir} ${time_dir}
                                               ${session_dir} ${ui_dir}
                                               ${web_dir}
                                               ${config_dir}/include
                                               ${console_dir} ${uplink_dir}
                                               ${wifi_dir} ${schedule_dir}
-                                              ${sd_log_dir})
+                                              ${sd_log_dir} ${battery_dir})
 target_include_directories(host_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_options(host_tests PRIVATE -Wall -Wextra -Werror)
 
