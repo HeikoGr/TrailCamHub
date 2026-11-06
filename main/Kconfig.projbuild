@@ -543,10 +543,11 @@ config CAMERA_DOWNLOAD_PHOTOS
 config CAMERA_DOWNLOAD_VIDEOS
     bool "Download videos (raw H.264 and AAC streams)"
     depends on SPIRAM
+    default y if HUB_PROFILE_AUTONOMOUS
     default n
     help
-        After the photos, play back every video of the media list that is
-        not on the SD card yet (cmdId 769) and store its streams as
+        After the photos, play back the videos selected below that are not
+        on the SD card yet (cmdId 769) and store their streams as
         /sdcard/<camera>/media/<dir>_<num>.h264 (H.264 Annex-B, playable
         with VLC) and .aac (AAC with ADTS headers). One MP4 can be made
         without re-encoding:
@@ -554,6 +555,50 @@ config CAMERA_DOWNLOAD_VIDEOS
         The camera streams the frames one by one; they are put in order in
         PSRAM and written through a 4 MB buffer in PSRAM. Verified on the
         T-Dongle-C5: a 15-second 1080p video takes about 31 s.
+
+choice CAMERA_VIDEO_DOWNLOAD
+    prompt "Which videos to download"
+    depends on CAMERA_DOWNLOAD_VIDEOS
+    default CAMERA_VIDEO_ON_REQUEST if HUB_PROFILE_AUTONOMOUS
+    default CAMERA_VIDEO_ALL
+    help
+        A video costs the camera's battery (about twice its length of
+        playback) and, when uploaded, data volume.
+
+config CAMERA_VIDEO_ALL
+    bool "Every video"
+    help
+        Every video of the media list that is not on the SD card yet.
+
+config CAMERA_VIDEO_ON_REQUEST
+    bool "Only videos requested in the app"
+    help
+        Only the videos asked for with "Download video" in the app or the
+        bot. The request reaches the hub with the next check-in, which makes
+        a camera read due at once; the video is uploaded with the sync after
+        that read. A video that is no longer on the camera's card, or whose
+        download failed three times, is reported as failed.
+
+endchoice
+
+config CAMERA_VIDEO_MAX_PER_SESSION
+    int "Videos downloaded in one camera session (0: no limit)"
+    depends on CAMERA_DOWNLOAD_VIDEOS
+    range 0 100
+    default 3 if CAMERA_VIDEO_ON_REQUEST
+    default 0
+    help
+        The newest ones first; the rest follow in later sessions.
+
+config UPLINK_VIDEO_MAX_MB
+    int "Largest video uploaded to the backend (MB)"
+    depends on CAMERA_DOWNLOAD_VIDEOS
+    range 1 1000
+    default 50
+    help
+        Requested videos are uploaded as MP4, built while they are sent from
+        the stored H.264 and AAC files (nothing extra is stored). A larger
+        one is reported as failed.
 
 choice CAMERA_VIDEO_MP4
     prompt "MP4 files for downloaded videos"

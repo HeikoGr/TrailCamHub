@@ -68,6 +68,9 @@ struct Command {
     std::string id;
     std::string type;
     std::int64_t media_id = 0;  // requestVideo; 0 = none
+    // requestVideo: presigned URL to PUT the MP4 to (https only); empty if
+    // none was given.
+    std::string upload_url;
 };
 
 struct CameraCheckin {
