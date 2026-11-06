@@ -20,10 +20,10 @@
 #include "hub_battery.hpp"
 #include "media_catalog.hpp"
 #include "media_store.hpp"
-#include "ota_policy.hpp"
-#include "ota_update.hpp"
 #include "mp4_file_source.hpp"
 #include "mp4_mux.hpp"
+#include "ota_policy.hpp"
+#include "ota_update.hpp"
 #include "schedule_state.hpp"
 #include "sdkconfig.h"
 #include "time_sync.h"
@@ -376,6 +376,8 @@ void update_firmware(const FirmwareOffer &offered)
         return;
     }
     ota::restart();
+}
+
 // Answers a requestVideo command: uploads the video if it is on the SD card,
 // asks for a camera read if the request is new. Returns whether the command
 // is settled (`out` is the answer); otherwise it is not acknowledged and
@@ -615,13 +617,12 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
              "Sync done: %d/%d thumbnails uploaded (%d not on SD), %d "
              "videos uploaded",
              report.thumbs_uploaded, report.thumbs_requested,
-             report.thumbs_not_on_sd);
+             report.thumbs_not_on_sd, report.videos_uploaded);
 
     // 5. A newer firmware, last, so this sync is complete before it.
     if (response.firmware.present) {
         update_firmware(response.firmware);
     }
-             report.thumbs_not_on_sd, report.videos_uploaded);
     return ESP_OK;
 }
 

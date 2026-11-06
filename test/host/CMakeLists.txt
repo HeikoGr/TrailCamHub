@@ -120,7 +120,7 @@ add_executable(host_tests
     ${wifi_dir}/disconnect_policy.cpp
     ${schedule_dir}/schedule_plan.cpp
     ${sd_log_dir}/log_files.cpp
-    ${ota_dir}/ota_policy.cpp)
+    ${ota_dir}/ota_policy.cpp
     ${battery_dir}/battery_level.cpp)
 target_include_directories(host_tests PRIVATE ${ble_dir} ${link_dir} ${mp4_dir} ${time_dir}
                                               ${session_dir} ${ui_dir}
@@ -128,8 +128,7 @@ target_include_directories(host_tests PRIVATE ${ble_dir} ${link_dir} ${mp4_dir} 
                                               ${config_dir}/include
                                               ${console_dir} ${uplink_dir}
                                               ${wifi_dir} ${schedule_dir}
-                                              ${sd_log_dir} ${ota_dir}/include)
-                                              ${sd_log_dir} ${battery_dir})
+                                              ${sd_log_dir} ${ota_dir}/include ${battery_dir})
 target_include_directories(host_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_options(host_tests PRIVATE -Wall -Wextra -Werror)
 
