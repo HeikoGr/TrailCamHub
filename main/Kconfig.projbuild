@@ -2,7 +2,7 @@ menu "TrailCamHub PoC"
 
 choice HUB_PROFILE
     prompt "Use case profile"
-    default HUB_PROFILE_ON_SITE if BOARD_TDONGLE || IDF_TARGET_ESP32P4
+    default HUB_PROFILE_ON_SITE if BOARD_TDONGLE || BOARD_ESP32S3_ETH || IDF_TARGET_ESP32P4
     default HUB_PROFILE_AUTONOMOUS
     help
         The board selects the hardware (pins, PSRAM, console); the profile
@@ -25,7 +25,7 @@ config HUB_PROFILE_ON_SITE
     help
         Stays awake and waits for the button, the web UI or the serial
         console; no automatic reads or check-ins unless a schedule is set.
-        Default for the T-Dongles and the ESP32-P4-NANO.
+        Default for the T-Dongles, the ESP32-S3-ETH and the ESP32-P4-NANO.
 
 endchoice
 
@@ -51,6 +51,17 @@ config BOARD_TDONGLE_C5
 config BOARD_TDONGLE
     bool
     default y if BOARD_TDONGLE_S3 || BOARD_TDONGLE_C5
+
+config BOARD_ESP32S3_ETH
+    bool "Waveshare ESP32-S3-ETH (W5500 Ethernet)"
+    depends on IDF_TARGET_ESP32S3 && !BOARD_TDONGLE_S3
+    default n
+    select ETH_SPI_ETHERNET_W5500
+    help
+        Use the W5500 SPI Ethernet controller of the board as the uplink.
+        PoE only powers the board, so the variants with and without the PoE
+        module are the same here. Selected by
+        sdkconfig.defaults.esp32s3-eth.
 
 config DONGLE_LED_BRIGHTNESS
     int "RGB LED brightness (0: off)"
@@ -689,26 +700,71 @@ config CAMERA_DOWNLOAD_STALL_TIMEOUT_S
 endmenu
 
 menu "Ethernet uplink"
-    depends on SOC_EMAC_SUPPORTED
+    depends on SOC_EMAC_SUPPORTED || BOARD_ESP32S3_ETH
 
 config ETH_UPLINK_ENABLE
     bool "Use wired Ethernet as the uplink"
     default y
     help
-        Start the on-chip Ethernet MAC with the IP101 PHY at boot and obtain
-        an address over DHCP. The Ethernet interface stays the default
-        route while the camera Wi-Fi is joined. The GPIO defaults match the
-        Waveshare ESP32-P4-NANO (RMII reference clock input on GPIO50).
+        Start the board's Ethernet controller at boot and obtain an address
+        over DHCP: the on-chip MAC with the IP101 PHY, or a W5500 on SPI. The
+        Ethernet interface stays the default route while the camera Wi-Fi is
+        joined. The GPIO defaults match the Waveshare ESP32-P4-NANO (RMII
+        reference clock input on GPIO50) and the Waveshare ESP32-S3-ETH.
+
+config ETH_UPLINK_W5500
+    bool
+    depends on ETH_UPLINK_ENABLE && BOARD_ESP32S3_ETH
+    default y
+
+config ETH_UPLINK_W5500_MISO_GPIO
+    int "W5500 MISO GPIO"
+    depends on ETH_UPLINK_W5500
+    range 0 48
+    default 12
+
+config ETH_UPLINK_W5500_MOSI_GPIO
+    int "W5500 MOSI GPIO"
+    depends on ETH_UPLINK_W5500
+    range 0 48
+    default 11
+
+config ETH_UPLINK_W5500_SCLK_GPIO
+    int "W5500 SCLK GPIO"
+    depends on ETH_UPLINK_W5500
+    range 0 48
+    default 13
+
+config ETH_UPLINK_W5500_CS_GPIO
+    int "W5500 CS GPIO"
+    depends on ETH_UPLINK_W5500
+    range 0 48
+    default 14
+
+config ETH_UPLINK_W5500_INT_GPIO
+    int "W5500 interrupt GPIO"
+    depends on ETH_UPLINK_W5500
+    range 0 48
+    default 10
+
+config ETH_UPLINK_W5500_SPI_MHZ
+    int "W5500 SPI clock (MHz)"
+    depends on ETH_UPLINK_W5500
+    range 1 40
+    default 20
+    help
+        These pins go through the GPIO matrix of the ESP32-S3, which limits
+        the clock to 40 MHz.
 
 config ETH_UPLINK_MDC_GPIO
     int "SMI MDC GPIO"
-    depends on ETH_UPLINK_ENABLE
+    depends on ETH_UPLINK_ENABLE && !ETH_UPLINK_W5500
     range 0 54
     default 31
 
 config ETH_UPLINK_MDIO_GPIO
     int "SMI MDIO GPIO"
-    depends on ETH_UPLINK_ENABLE
+    depends on ETH_UPLINK_ENABLE && !ETH_UPLINK_W5500
     range 0 54
     default 52
 
@@ -716,11 +772,12 @@ config ETH_UPLINK_PHY_RST_GPIO
     int "PHY reset GPIO (-1: none)"
     depends on ETH_UPLINK_ENABLE
     range -1 54
+    default 9 if ETH_UPLINK_W5500
     default 51
 
 config ETH_UPLINK_PHY_ADDR
     int "PHY address"
-    depends on ETH_UPLINK_ENABLE
+    depends on ETH_UPLINK_ENABLE && !ETH_UPLINK_W5500
     range 0 31
     default 1
 
@@ -765,12 +822,13 @@ config WEB_UI_ENABLE
         "TrailCamHub-XXXX" next to the camera station and serve it at
         http://10.42.0.1; while the camera Wi-Fi is joined, the access point
         uses the camera's channel, so clients are disconnected briefly when
-        it changes. Needs about 40 KB of internal RAM. The ESP32-P4 serves
-        it over its Ethernet port instead (see WEB_UI_OVER_ETHERNET).
+        it changes. Needs about 40 KB of internal RAM. Boards with an Ethernet
+        uplink serve it over their Ethernet port instead (see
+        WEB_UI_OVER_ETHERNET).
 
 config WEB_UI_OVER_ETHERNET
     bool
-    depends on WEB_UI_ENABLE && IDF_TARGET_ESP32P4
+    depends on WEB_UI_ENABLE && ETH_UPLINK_ENABLE
     default y
     help
         Serve the web UI on the Ethernet interface at the address that the
