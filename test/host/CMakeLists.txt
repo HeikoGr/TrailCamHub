@@ -33,6 +33,7 @@ set(time_dir ${repo_root}/components/time_sync)
 set(wifi_dir ${repo_root}/components/camera_wifi)
 set(schedule_dir ${repo_root}/components/schedule)
 set(sd_log_dir ${repo_root}/components/sd_log)
+set(ota_dir ${repo_root}/components/ota_update)
 set(battery_dir ${repo_root}/components/hub_battery)
 
 add_executable(host_tests
@@ -57,6 +58,7 @@ add_executable(host_tests
     test_media_files.cpp
     test_media_store.cpp
     test_mp4_mux.cpp
+    test_ota_policy.cpp
     test_time_policy.cpp
     test_pppp_session.cpp
     test_playback.cpp
@@ -118,6 +120,7 @@ add_executable(host_tests
     ${wifi_dir}/disconnect_policy.cpp
     ${schedule_dir}/schedule_plan.cpp
     ${sd_log_dir}/log_files.cpp
+    ${ota_dir}/ota_policy.cpp
     ${battery_dir}/battery_level.cpp)
 target_include_directories(host_tests PRIVATE ${ble_dir} ${link_dir} ${mp4_dir} ${time_dir}
                                               ${session_dir} ${ui_dir}
@@ -125,7 +128,7 @@ target_include_directories(host_tests PRIVATE ${ble_dir} ${link_dir} ${mp4_dir} 
                                               ${config_dir}/include
                                               ${console_dir} ${uplink_dir}
                                               ${wifi_dir} ${schedule_dir}
-                                              ${sd_log_dir} ${battery_dir})
+                                              ${sd_log_dir} ${ota_dir}/include ${battery_dir})
 target_include_directories(host_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_options(host_tests PRIVATE -Wall -Wextra -Werror)
 

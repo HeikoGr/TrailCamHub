@@ -208,7 +208,11 @@ export interface CameraReport {
 }
 
 export interface CheckinRequest {
+  /** Version of the hub firmware: a release tag (v1.2.3) or a commit hash. */
   hubFirmware?: string;
+  /** Board and build variant (`esp32s3`, `release`): which image fits. */
+  hubBoard?: string;
+  hubVariant?: string;
   hubBatPercent?: number;
   schedule?: HubSchedule;
   cameras?: CameraReport[];
@@ -238,6 +242,11 @@ export interface CheckinResponse {
   cameras: CameraCheckin[];
   /** Schedule set in the app; empty if none, so the hub uses its own. */
   config: ScheduleConfig;
+  /**
+   * A newer firmware release for the hub's board and variant (docs/ota.md);
+   * absent if there is none or the hub runs a development build.
+   */
+  firmware?: { version: string; url: string; sha256: string; size: number };
 }
 
 export interface CameraAck {

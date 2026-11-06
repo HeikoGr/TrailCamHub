@@ -22,6 +22,8 @@
 #include "media_store.hpp"
 #include "mp4_file_source.hpp"
 #include "mp4_mux.hpp"
+#include "ota_policy.hpp"
+#include "ota_update.hpp"
 #include "schedule_state.hpp"
 #include "sdkconfig.h"
 #include "time_sync.h"
@@ -349,6 +351,33 @@ void apply_checkin_result(CameraState &camera, const CameraCheckin &result)
     }
 }
 
+// Installs a firmware the backend offers, if this hub takes it, and
+// restarts into it.
+void update_firmware(const FirmwareOffer &offered)
+{
+    const ota::Decision decision =
+        ota::decide(offered.version, ota::running_version(),
+                    ota::rolled_back_version(), ota::automatic());
+    if (decision != ota::Decision::install) {
+        ESP_LOGI(TAG, "Firmware %s offered, not installed: %s",
+                 offered.version.c_str(), ota::decision_text(decision));
+        return;
+    }
+    ota::Offer offer;
+    offer.version = offered.version;
+    offer.url = offered.url;
+    offer.sha256 = offered.sha256;
+    offer.size = offered.size;
+    std::string error;
+    if (ota::install(offer, error) != ESP_OK) {
+        // Tried again at the next check-in.
+        ESP_LOGE(TAG, "Firmware update to %s failed: %s",
+                 offered.version.c_str(), error.c_str());
+        return;
+    }
+    ota::restart();
+}
+
 // Answers a requestVideo command: uploads the video if it is on the SD card,
 // asks for a camera read if the request is new. Returns whether the command
 // is settled (`out` is the answer); otherwise it is not acknowledged and
@@ -437,6 +466,8 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
 
     CheckinRequest request;
     request.hub_firmware = esp_app_get_description()->version;
+    request.hub_board = ota::board();
+    request.hub_variant = ota::variant();
     // -1 (left out of the check-in) on boards without a measurement.
     request.hub_bat_percent = hub_battery::percent();
     request.schedule = schedule_report();
@@ -462,6 +493,8 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
         return checkin.error != ESP_OK ? checkin.error : ESP_FAIL;
     }
     report.server_time = response.server_time;
+    // The firmware can reach the backend: a new one is kept.
+    ota::confirm_running();
     set_clock(response.server_time);
     schedule::Remote remote;
     remote.has_camera_plan = response.has_camera_plan;
@@ -585,6 +618,11 @@ esp_err_t run(const hub_config::Settings &settings, Report &report)
              "videos uploaded",
              report.thumbs_uploaded, report.thumbs_requested,
              report.thumbs_not_on_sd, report.videos_uploaded);
+
+    // 5. A newer firmware, last, so this sync is complete before it.
+    if (response.firmware.present) {
+        update_firmware(response.firmware);
+    }
     return ESP_OK;
 }
 
