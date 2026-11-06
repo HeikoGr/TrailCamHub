@@ -317,6 +317,54 @@ config UPLINK_WIFI_POWER_SAVE
 
 endmenu
 
+menu "Hub battery"
+
+config HUB_BATTERY_MAX17048
+    bool "Measure the hub battery with a MAX17048 fuel gauge"
+    default y if IDF_TARGET_ESP32S3 && !BOARD_TDONGLE_S3
+    default n
+    help
+        Read the hub's battery from a MAX17048 fuel gauge on I2C, as on the
+        Waveshare ESP32-S3-A7670E-4G. The level is sent in the check-in
+        (hubBatPercent), shown by the console's status command and written
+        to the memory log. Without a cell the gauge has no power and the
+        level stays unknown. Boards without a gauge leave this off.
+
+config HUB_BATTERY_I2C_SDA_GPIO
+    int "I2C SDA GPIO of the gauge"
+    depends on HUB_BATTERY_MAX17048
+    default 15
+
+config HUB_BATTERY_I2C_SCL_GPIO
+    int "I2C SCL GPIO of the gauge"
+    depends on HUB_BATTERY_MAX17048
+    default 16
+
+config HUB_BATTERY_PERCENT_FROM_VOLTAGE
+    bool "Compute the percentage from the cell voltage"
+    depends on HUB_BATTERY_MAX17048
+    default n
+    help
+        Report a percentage from the cell voltage along a typical Li-ion
+        curve between the empty and the full voltage below, instead of the
+        gauge's own state of charge. The gauge's estimate is usually better
+        (it is less affected by load peaks of the modem), but it needs some
+        time to settle after the cell was inserted.
+
+config HUB_BATTERY_EMPTY_MV
+    int "Empty cell voltage (mV)"
+    depends on HUB_BATTERY_PERCENT_FROM_VOLTAGE
+    range 2500 4000
+    default 3300
+
+config HUB_BATTERY_FULL_MV
+    int "Full cell voltage (mV)"
+    depends on HUB_BATTERY_PERCENT_FROM_VOLTAGE
+    range 3500 4500
+    default 4200
+
+endmenu
+
 menu "SD card"
 
 config SD_CARD_ENABLE
